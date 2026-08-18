@@ -1,1 +1,0 @@
-please act like a senior product engineer handing off a task to another ai. PRD describes what we are missing, why we need it, and from a UX perspective how it should work, and then leave the code implementation to the other ai, write that in detail here as a chat message

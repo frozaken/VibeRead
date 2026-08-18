@@ -25,6 +25,25 @@ provider workflow, clearly visible in the UI, and documented in `PRIVACY.md`.
 
 The project intentionally has no third-party Swift package dependencies.
 
+## macOS compatibility
+
+The deployment target is macOS 13 Ventura. Keep new code buildable and usable
+on that version unless the project explicitly decides to raise the target.
+
+- Check API availability before using newer AppKit, AVFoundation, or SwiftUI
+  APIs.
+- Wrap macOS 14 or newer behavior in availability checks and provide a macOS
+  13 fallback.
+- Keep pure data models `Sendable` where appropriate. Use `@MainActor` for
+  UI-bound services and state.
+- Do not change the deployment target or actor-isolation settings as an
+  incidental fix.
+
+APIs such as SwiftUI `onKeyPress` and two-parameter `onChange` closures require
+macOS 14. The action palette already includes a macOS 13 AppKit keyboard
+fallback. A successful compile against a newer SDK does not prove that the
+macOS 13 path still works, so test compatibility-sensitive changes carefully.
+
 ## Before opening a pull request
 
 Run the build and tests:

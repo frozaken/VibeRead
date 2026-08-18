@@ -16,6 +16,8 @@ This site has no runtime backend.
 
 `npm run build` exports plain static files to `out/`. The public website is not
 part of the desktop app runtime and can be hosted on any static file host.
+When deploying the full repository on Vercel, set the project root directory
+to `website`.
 
 ```bash
 # Requires Node.js 20.9 or newer

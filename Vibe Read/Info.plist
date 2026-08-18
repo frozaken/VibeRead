@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Accessibility usage description (shown when requesting permission) -->
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Vibe Read uses accessibility access when you invoke a global shortcut, so it can read selected text and paste results at the cursor.</string>
+    <!-- Microphone usage description (for dictation feature) -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Vibe Read uses microphone access only while you record a dictation for transcription.</string>
+    <!-- Allow app to run in background for audio playback -->
+    <key>NSSupportsAutomaticTermination</key>
+    <false/>
+    <key>NSSupportsSuddenTermination</key>
+    <false/>
+    <!-- LSUIElement would hide from dock, but we want to be visible -->
+
+</dict>
+</plist>

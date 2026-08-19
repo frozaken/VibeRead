@@ -7,6 +7,13 @@ leaves the Mac for the provider selected by the user.
 
 ## Provider setup
 
+For the normal ElevenLabs setup, open Vibe Read, paste the key under
+**Settings > Providers**, click **Save Key**, and close Settings. Press **Fn**
+once to start dictating and press **Fn** again to send. Nothing else is needed.
+
+The other provider and model controls are optional. They exist for people who
+want Groq, OpenRouter, OpenAI, or a compatible service running locally.
+
 Dictation and Cmd + E are configured independently.
 
 | Feature | Built-in choices | What can be selected |

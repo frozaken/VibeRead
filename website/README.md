@@ -4,6 +4,16 @@ The static landing page for Vibe Read, a free and open source Mac app for
 voice dictation, reading selected text aloud, and configurable Cmd + E
 actions.
 
+## App setup
+
+1. Open Vibe Read.
+2. Open Providers and paste an ElevenLabs API key.
+3. Click Save Key.
+4. Allow Microphone and Accessibility when macOS asks.
+5. Press Fn once to start dictation and Fn again to send.
+
+No Vibe Read account, subscription, database, or server setup is required.
+
 ## Static only
 
 This site has no runtime backend.

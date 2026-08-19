@@ -42,7 +42,21 @@
 
 Vibe Read has no account system or operated server in the request path. The source is available under the [MIT License](LICENSE).
 
-## Quick start
+## Use Vibe Read
+
+Once the app is installed, setup takes about a minute.
+
+1. Open Vibe Read.
+2. In **Providers**, leave **ElevenLabs** selected and paste your ElevenLabs API key.
+3. Click **Save Key**, then close Settings.
+4. The first time macOS asks, allow **Microphone** and **Accessibility** access for Vibe Read.
+5. Press **Fn** once to start dictating. Press **Fn** again to stop, transcribe, and paste.
+
+That is all you need for dictation. Cmd + E text actions are optional and can be configured later with Groq, OpenRouter, OpenAI, or a compatible local service.
+
+Vibe Read never needs your Mac login password. The API key is entered only inside Vibe Read. If an older source build shows a password dialog for an old Vibe Read Keychain item, deny it and install the latest build.
+
+## Build from source
 
 You need macOS 13 Ventura or later and Xcode 16 or later. The project has no third-party Swift package dependencies.
 
@@ -61,7 +75,7 @@ You need macOS 13 Ventura or later and Xcode 16 or later. The project has no thi
 
 5. Choose your Personal Team and give your fork a unique bundle identifier such as `com.yourname.VibeRead`.
 
-6. Keep that team and bundle identifier stable. Changing either one can make macOS ask for permissions again and can create a separate Keychain namespace.
+6. Keep that team and bundle identifier stable so macOS keeps the app's permissions.
 
 7. Build and run.
 
@@ -70,11 +84,11 @@ You need macOS 13 Ventura or later and Xcode 16 or later. The project has no thi
    then requests Microphone access for dictation or Accessibility access for
    function-key shortcuts, selected text, and pasting.
 
-9. The app opens AI Provider settings on a clean install. Pick a dictation provider and enter your own key. ElevenLabs uses Save Key. The other hosted providers use Save & Verify.
+9. Follow the five steps in **Use Vibe Read** above.
 
 Read-aloud can use ElevenLabs with the same key used for Scribe dictation, or voices already on your Mac with no network request. Ordinary global chords such as Cmd + E use a native macOS hotkey and do not require Accessibility permission. Provider-backed Cmd + E actions are optional.
 
-If you hand this repository to Codex or another coding agent, ask it to follow the same steps, build the `Vibe Read` scheme for `My Mac`, and leave provider keys for you to enter in the app. Keys should never be placed in source files or shell history.
+If you hand this repository to Codex or another coding agent, ask it to build the `Vibe Read` scheme for `My Mac`, install the app, and leave the Providers screen open. Paste your key yourself. Keys should never be placed in source files, chat, or shell history.
 
 ## Configure a provider
 

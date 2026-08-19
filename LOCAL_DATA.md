@@ -12,6 +12,7 @@ The main data directory is:
 ├── dictations.sqlite3
 ├── dictations.sqlite3-wal      # may exist while the app is running
 ├── dictations.sqlite3-shm      # may exist while the app is running
+├── library.json               # saved text, pages, summaries, and links
 └── Dictations/
     └── … retained audio files
 ```
@@ -22,12 +23,14 @@ The main data directory is:
   changes the transcript.
 - `Dictations/` contains recordings that are still inside the chosen retention
   window.
+- `library.json` contains items saved to the local Library. Delete individual
+  items in Library or use **Settings → Local Data → Delete Saved Library**.
 - Preferences such as shortcuts, action definitions, dictation and text
   provider choices, model identifiers, language, custom provider URLs, and
   retention settings use the standard macOS preferences system.
 - API keys are generic-password items in macOS Keychain. Groq, OpenRouter, and
   OpenAI each use one provider item that can power both dictation and Cmd + E.
-  ElevenLabs uses a dictation-only item. Custom dictation and custom text
+  ElevenLabs uses one item for dictation and optional read-aloud. Custom dictation and custom text
   actions use separate items. Keys are not stored in SQLite or preferences.
 
 The SQLite database is not application-level encrypted. Use FileVault and a
@@ -108,7 +111,8 @@ Before uninstalling:
 1. Use **Settings → AI Provider** to remove each saved provider key. Select
    each configured provider in turn if more than one has a saved key.
 2. Use **Settings → Local Data → Delete All History and Audio**.
-3. Quit the app and remove `~/Library/Application Support/VibeRead/` if it still
+3. Use **Settings → Local Data → Delete Saved Library**.
+4. Quit the app and remove `~/Library/Application Support/VibeRead/` if it still
    exists.
 
 Other non-secret preferences may remain in the normal macOS preferences store.

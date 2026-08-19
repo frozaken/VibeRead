@@ -52,7 +52,7 @@ export function FAQ() {
         <div className="space-y-4">
           <FAQItem
             question="What is Vibe Read?"
-            answer="Vibe Read is a free and open source Mac app for voice dictation, macOS read-aloud, and configurable Cmd + E actions."
+            answer="Vibe Read is a free and open source Mac app for voice dictation, read-aloud, a local reading Library, and configurable Cmd + E actions."
           />
           <FAQItem
             question="Does Vibe Read upload my dictations?"
@@ -72,15 +72,15 @@ export function FAQ() {
           />
           <FAQItem
             question="Which AI providers work?"
-            answer="Dictation supports ElevenLabs, Groq, OpenRouter, OpenAI, and compatible custom endpoints, with provider, model, and language controls. Cmd + E can use OpenRouter, Groq, OpenAI, or a custom endpoint independently."
+            answer="Dictation supports ElevenLabs, Groq, OpenRouter, OpenAI, and compatible custom endpoints, with provider, model, and language controls. ElevenLabs can also power read-aloud. Cmd + E can use OpenRouter, Groq, OpenAI, or a custom endpoint independently."
           />
           <FAQItem
             question="Does it work offline?"
-            answer="Read-aloud and local actions can work offline. Dictation and provider-backed actions need the configured provider unless you run a compatible service on your Mac."
+            answer="macOS read-aloud, the local Library, and local actions can work offline. ElevenLabs read-aloud, dictation, page capture, and provider-backed actions need a network connection unless you use a compatible local service."
           />
           <FAQItem
             question="Can I change Cmd + E?"
-            answer="Yes. Rebind the shortcut and choose or edit its actions. Provider-backed results stay available to preview, copy, cancel, or apply."
+            answer="Yes. Rebind the shortcut and choose or edit its actions. Read and Save work on selected text or copied links. Provider-backed results stay available to preview, copy, cancel, or apply."
           />
           <FAQItem
             question="Can I change the source?"

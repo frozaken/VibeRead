@@ -25,9 +25,9 @@ import { Navbar } from "@/components/landing/Navbar";
 
 const marqueeItems = [
   "Dictate in any app",
-  "Read selected text aloud",
+  "Read with ElevenLabs or macOS",
   "Make Cmd + E yours",
-  "Keep history on your Mac",
+  "Save pages to a local Library",
 ];
 
 function MarqueeItems() {

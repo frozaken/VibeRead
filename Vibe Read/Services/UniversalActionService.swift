@@ -43,6 +43,7 @@ final class UniversalActionService: ObservableObject {
     typealias CurrentApplication = () -> UniversalActionTarget?
     typealias AccessibilityReadiness = () -> Bool
     typealias PasteOperation = (String, UniversalActionTarget?) -> Bool
+    typealias ExtractOperation = @Sendable (URL) async throws -> ExtractedContent
 
     static let shared = UniversalActionService()
 
@@ -50,11 +51,13 @@ final class UniversalActionService: ObservableObject {
     @Published private(set) var lastError: Error?
     @Published private(set) var lastOutput: String?
     @Published private(set) var didCopyOutput = false
+    @Published private(set) var lastNotice: String?
 
     private let transform: TransformOperation
     private let currentApplication: CurrentApplication
     private let isAccessibilityReady: AccessibilityReadiness
     private let paste: PasteOperation
+    private let extract: ExtractOperation
     private var actionTask: Task<Void, Never>?
     private var generationID: UUID?
     private var targetApplication: UniversalActionTarget?
@@ -76,12 +79,16 @@ final class UniversalActionService: ObservableObject {
         },
         paste: @escaping PasteOperation = { text, target in
             AccessibilityService.shared.pasteText(text, expectedTarget: target)
+        },
+        extract: @escaping ExtractOperation = { url in
+            try await ContentExtractionService().extract(url)
         }
     ) {
         self.transform = transform
         self.currentApplication = currentApplication
         self.isAccessibilityReady = isAccessibilityReady
         self.paste = paste
+        self.extract = extract
     }
 
     func beginSession(
@@ -93,6 +100,7 @@ final class UniversalActionService: ObservableObject {
         lastError = nil
         lastOutput = nil
         didCopyOutput = false
+        lastNotice = nil
         targetApplication = UniversalActionTarget(
             bundleIdentifier: targetBundleIdentifier,
             processIdentifier: processIdentifier,
@@ -120,6 +128,66 @@ final class UniversalActionService: ObservableObject {
     func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+        lastNotice = "Copied"
+    }
+
+    func saveSelection(_ text: String) {
+        guard LocalLibraryStore.shared.saveText(text) != nil else {
+            lastError = UniversalActionError.emptyInput
+            return
+        }
+        lastError = nil
+        lastNotice = "Saved to Library"
+    }
+
+    func saveURL(_ url: URL) {
+        startContentTask { [weak self] in
+            _ = try await LocalLibraryStore.shared.saveURL(url)
+            self?.lastNotice = "Saved to Library"
+        }
+    }
+
+    func readURL(_ url: URL) {
+        let extract = self.extract
+        startContentTask { [weak self] in
+            let content = try await extract(url)
+            guard let text = content.text,
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ContentExtractionError.captionsUnavailable
+            }
+            self?.isProcessing = false
+            InstantTTSService.shared.speak(text)
+        }
+    }
+
+    func summarizeURL(_ url: URL) {
+        let extract = self.extract
+        let transform = self.transform
+        startContentTask { [weak self] in
+            let content = try await extract(url)
+            guard let text = content.text,
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ContentExtractionError.noReadableContent
+            }
+            let output = try await transform(
+                text,
+                "Summarize this clearly and accurately. Preserve important facts and names. Return only the summary."
+            )
+            self?.lastOutput = output
+        }
+    }
+
+    func run(_ action: LocalTextAction, onURL url: URL) {
+        let extract = self.extract
+        let transform = self.transform
+        startContentTask { [weak self] in
+            let content = try await extract(url)
+            guard let text = content.text,
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ContentExtractionError.noReadableContent
+            }
+            self?.lastOutput = try await transform(text, action.prompt)
+        }
     }
 
     func pasteLastDictation() {
@@ -149,6 +217,7 @@ final class UniversalActionService: ObservableObject {
         lastError = nil
         lastOutput = nil
         didCopyOutput = false
+        lastNotice = nil
         let transform = self.transform
 
         actionTask = Task { [weak self] in
@@ -180,6 +249,40 @@ final class UniversalActionService: ObservableObject {
         actionTask?.cancel()
         actionTask = nil
         isProcessing = false
+    }
+
+    private func startContentTask(
+        _ operation: @escaping @MainActor () async throws -> Void
+    ) {
+        actionTask?.cancel()
+        let requestID = UUID()
+        generationID = requestID
+        isProcessing = true
+        lastError = nil
+        lastOutput = nil
+        lastNotice = nil
+        didCopyOutput = false
+        actionTask = Task { [weak self] in
+            do {
+                try await operation()
+                try Task.checkCancellation()
+                guard let self, self.generationID == requestID else { return }
+                self.isProcessing = false
+                self.actionTask = nil
+                self.generationID = nil
+            } catch is CancellationError {
+                guard let self, self.generationID == requestID else { return }
+                self.isProcessing = false
+                self.actionTask = nil
+                self.generationID = nil
+            } catch {
+                guard let self, self.generationID == requestID else { return }
+                self.lastError = error
+                self.isProcessing = false
+                self.actionTask = nil
+                self.generationID = nil
+            }
+        }
     }
 
     @discardableResult
@@ -228,6 +331,7 @@ final class UniversalActionService: ObservableObject {
         lastError = nil
         lastOutput = nil
         didCopyOutput = false
+        lastNotice = nil
     }
 
     static func targetMatches(

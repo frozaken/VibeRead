@@ -781,10 +781,6 @@ struct PillIndicatorView: View {
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.primary.opacity(0.1), lineWidth: 0.5)
-        )
     }
 
     // Recording mode for display purposes
@@ -827,10 +823,6 @@ struct PillIndicatorView: View {
                     .fill(.ultraThinMaterial)
                     .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
             )
-            .overlay(
-                Capsule()
-                    .stroke(Color.primary.opacity(0.1), lineWidth: 0.5)
-            )
         }
     }
 
@@ -846,10 +838,6 @@ struct PillIndicatorView: View {
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
         )
-        .overlay(
-            Capsule()
-                .stroke(compactBorderColor, lineWidth: 0.5)
-        )
     }
 
     // MARK: - Minimal Audio Player Pill (clean, no moving parts)
@@ -864,10 +852,6 @@ struct PillIndicatorView: View {
             Capsule()
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
-        )
-        .overlay(
-            Capsule()
-                .stroke(Color.accentColor.opacity(0.2), lineWidth: 0.5)
         )
     }
 
@@ -933,15 +917,6 @@ struct PillIndicatorView: View {
     private var transcribingSpherePill: some View {
         ThinkingOrbView(size: 30)
             .frame(width: 44, height: 44)
-            .background(
-                Circle()
-                    .fill(.ultraThinMaterial)
-                    .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
-            )
-            .overlay(
-                Circle()
-                    .stroke(Color.primary.opacity(0.1), lineWidth: 0.5)
-            )
     }
 
     // MARK: - Recording Warning Pill (time limit approaching)
@@ -988,10 +963,6 @@ struct PillIndicatorView: View {
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-        )
     }
 
     // MARK: - Slow Transcribing Pill
@@ -1029,10 +1000,6 @@ struct PillIndicatorView: View {
             RoundedRectangle(cornerRadius: 16)
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.primary.opacity(0.1), lineWidth: 0.5)
         )
     }
 
@@ -1098,10 +1065,6 @@ struct PillIndicatorView: View {
             RoundedRectangle(cornerRadius: 16)
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(isPermissionError ? Color.orange.opacity(0.3) : Color.primary.opacity(0.1), lineWidth: 0.5)
         )
     }
 
@@ -1181,10 +1144,6 @@ struct PillIndicatorView: View {
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-        )
     }
 
     // MARK: - Cancelled While Transcribing Pill
@@ -1241,10 +1200,6 @@ struct PillIndicatorView: View {
             RoundedRectangle(cornerRadius: 12)
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
         )
     }
 
@@ -1391,10 +1346,6 @@ private struct DictationPillWithWarning: View {
                     .fill(.ultraThinMaterial)
                     .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
             )
-            .overlay(
-                Capsule()
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-            )
         }
         .onAppear {
             startSilenceDetection()
@@ -1500,10 +1451,6 @@ private struct SilenceWarningView: View {
             RoundedRectangle(cornerRadius: 10)
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.orange.opacity(0.3), lineWidth: 1)
         )
     }
 }

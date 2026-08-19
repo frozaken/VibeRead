@@ -25,7 +25,8 @@ export function ContextAwareContent({ theme = "dark", compact = false }: Context
             isLight ? "text-slate-600" : "text-[#FFFFEB]/70")}>
           Choose ElevenLabs, Groq, OpenRouter, OpenAI, or a compatible custom
           endpoint for dictation. Pick the model and language, then configure
-          Cmd + E separately if you want it.
+          Cmd + E separately if you want it. ElevenLabs can also power the
+          voice used for read-aloud.
         </p>
         <div className={cn("p-4 rounded-2xl border max-w-md mb-8", isLight ? "bg-slate-50 border-slate-200" : "bg-white/5 border-white/10")}>
             <div className="flex items-center gap-3 mb-2">

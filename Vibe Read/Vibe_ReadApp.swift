@@ -219,6 +219,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hasSelection = selectedText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         let clipboardText = NSPasteboard.general.string(forType: .string)
         let hasClipboard = clipboardText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let sourceText = hasSelection ? selectedText : (hasClipboard ? clipboardText : nil)
+        let sourceURL = sourceText.flatMap(ContentExtractionService.normalizedWebURL(from:))
         let context = AppContext(
             frontmostApp: AppInfo(
                 name: frontmost?.localizedName ?? "Unknown",
@@ -228,11 +230,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // opens. Reading the pasteboard again later could send newly copied,
             // unrelated content to a provider without the preview reflecting the
             // source the user originally chose.
-            selectedText: hasSelection ? selectedText : (hasClipboard ? clipboardText : nil),
-            browserURL: nil,
+            selectedText: sourceText,
+            browserURL: sourceURL,
             documentPath: nil,
             emailContent: nil,
-            contextType: hasSelection ? .textSelection : (hasClipboard ? .clipboard : .empty),
+            contextType: sourceURL.map(ContextType.browser)
+                ?? (hasSelection ? .textSelection : (hasClipboard ? .clipboard : .empty)),
             needsPermission: !accessibility.hasAccessibilityPermission
         )
         UniversalOverlayController.shared.show(with: context)

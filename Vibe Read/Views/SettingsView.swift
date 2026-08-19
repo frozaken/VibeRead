@@ -8,7 +8,8 @@ struct SettingsView: View {
 
     private enum Tab: String, CaseIterable, Identifiable {
         case general = "General"
-        case provider = "AI Provider"
+        case providers = "Providers"
+        case readAloud = "Read Aloud"
         case shortcuts = "Shortcuts"
         case storage = "Local Data"
         case about = "About"
@@ -17,7 +18,8 @@ struct SettingsView: View {
         var icon: String {
             switch self {
             case .general: return "gear"
-            case .provider: return "key"
+            case .providers: return "key"
+            case .readAloud: return "speaker.wave.2"
             case .shortcuts: return "keyboard"
             case .storage: return "internaldrive"
             case .about: return "info.circle"
@@ -26,7 +28,7 @@ struct SettingsView: View {
     }
 
     init(startsOnProvider: Bool = false) {
-        _tab = State(initialValue: startsOnProvider ? .provider : .general)
+        _tab = State(initialValue: startsOnProvider ? .providers : .general)
     }
 
     var body: some View {
@@ -52,7 +54,8 @@ struct SettingsView: View {
                     Group {
                         switch tab {
                         case .general: LocalGeneralSettings()
-                        case .provider: ProviderConfigurationSettingsView()
+                        case .providers: ProviderConfigurationSettingsView()
+                        case .readAloud: LocalReadAloudSettings()
                         case .shortcuts: LocalShortcutSettings()
                         case .storage: LocalDataSettingsView()
                         case .about: LocalAboutSettings()
@@ -65,7 +68,7 @@ struct SettingsView: View {
         .frame(width: 880, height: 700)
         .onAppear {
             if AIProviderSettings.shared.needsDictationSetup {
-                tab = .provider
+                tab = .providers
             }
         }
     }
@@ -74,7 +77,6 @@ struct SettingsView: View {
 private struct LocalGeneralSettings: View {
     @EnvironmentObject private var settings: AppSettings
     @ObservedObject private var accessibility = AccessibilityService.shared
-    private let voices = InstantTTSService.availableVoices
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -114,22 +116,6 @@ private struct LocalGeneralSettings: View {
                 Toggle("Sound effects", isOn: $settings.dictationSoundEffectsEnabled)
             }
 
-            SettingsSection(title: "Local read-aloud") {
-                Picker("macOS voice", selection: $settings.preferredVoiceId) {
-                    ForEach(voices, id: \.identifier) { voice in
-                        Text("\(voice.name) · \(voice.language)").tag(voice.identifier)
-                    }
-                }
-                HStack {
-                    Text("Speed")
-                    Slider(value: $settings.voiceSpeed, in: 0.6...1.8, step: 0.05)
-                    Text(String(format: "%.2fx", settings.voiceSpeed)).monospacedDigit()
-                }
-                Button("Preview voice") {
-                    InstantTTSService.shared.previewVoice(voiceId: settings.preferredVoiceId)
-                }
-            }
-
             SettingsSection(title: "Appearance") {
                 Picker("Theme", selection: $settings.themeMode) {
                     Text("System").tag(ThemeMode.system)
@@ -139,12 +125,114 @@ private struct LocalGeneralSettings: View {
                 .pickerStyle(.segmented)
             }
         }
+    }
+}
+
+private struct LocalReadAloudSettings: View {
+    @EnvironmentObject private var settings: AppSettings
+    @ObservedObject private var tts = InstantTTSService.shared
+    private let voices = InstantTTSService.availableVoices
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsSection(title: "Voice") {
+                Picker("Provider", selection: $settings.readAloudProvider) {
+                    ForEach(ReadAloudProvider.allCases) { provider in
+                        Text(provider.displayName).tag(provider)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                if settings.readAloudProvider == .elevenLabs {
+                    Picker("Model", selection: $settings.elevenLabsTTSModel) {
+                        Text("Multilingual v2 · stable long-form").tag("eleven_multilingual_v2")
+                        Text("Flash v2.5 · fastest and lower cost").tag("eleven_flash_v2_5")
+                        Text("Eleven v3 · most expressive").tag("eleven_v3")
+                    }
+                    Picker("Voice", selection: $settings.elevenLabsVoiceId) {
+                        if !tts.elevenLabsVoices.contains(where: { $0.voiceID == settings.elevenLabsVoiceId }) {
+                            Text(settings.elevenLabsVoiceName).tag(settings.elevenLabsVoiceId)
+                        }
+                        ForEach(tts.elevenLabsVoices) { voice in
+                            Text("\(voice.name) · \(voice.detail)").tag(voice.voiceID)
+                        }
+                    }
+                    .onChange(of: settings.elevenLabsVoiceId) { newID in
+                        if let voice = tts.elevenLabsVoices.first(where: { $0.voiceID == newID }) {
+                            settings.elevenLabsVoiceName = voice.name
+                        }
+                    }
+                    HStack {
+                        Button {
+                            tts.refreshElevenLabsVoices()
+                        } label: {
+                            Label(
+                                tts.isLoadingVoices ? "Loading Voices" : "Load My Voices",
+                                systemImage: tts.isLoadingVoices ? "hourglass" : "arrow.clockwise"
+                            )
+                        }
+                        .disabled(tts.isLoadingVoices)
+                        Button("Preview") { tts.previewVoice(voiceId: settings.elevenLabsVoiceId) }
+                            .disabled(settings.elevenLabsVoiceId.isEmpty)
+                    }
+                    Text("The ElevenLabs key configured under Providers is shared with dictation. It is read only after Load My Voices, Preview, or Read.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Picker("Voice", selection: $settings.preferredVoiceId) {
+                        ForEach(voices, id: \.identifier) { voice in
+                            Text("\(voice.name) · \(voice.language)").tag(voice.identifier)
+                        }
+                    }
+                    Button("Preview") { tts.previewVoice(voiceId: settings.preferredVoiceId) }
+                    Text("macOS voices run entirely on this Mac.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            SettingsSection(title: "Playback") {
+                HStack {
+                    Text("Speed")
+                    Slider(value: $settings.voiceSpeed, in: 0.6...1.8, step: 0.05)
+                    Text(String(format: "%.2fx", settings.voiceSpeed)).monospacedDigit()
+                }
+                if settings.readAloudProvider == .elevenLabs {
+                    DisclosureGroup("Voice tuning") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            voiceSlider("Stability", value: $settings.voiceStability)
+                            voiceSlider("Similarity", value: $settings.voiceSimilarityBoost)
+                            voiceSlider("Style", value: $settings.voiceStyle)
+                            Toggle("Speaker boost", isOn: $settings.voiceSpeakerBoost)
+                        }
+                        .padding(.top, 8)
+                    }
+                }
+                if let error = tts.error {
+                    Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+        }
         .onAppear {
-            if !voices.contains(where: { $0.identifier == settings.preferredVoiceId }),
-               let defaultVoice = AVSpeechSynthesisVoice(language: Locale.current.language.languageCode?.identifier ?? "en")
-                    ?? voices.first {
+            if settings.readAloudProvider == .macOS,
+               !voices.contains(where: { $0.identifier == settings.preferredVoiceId }),
+               let defaultVoice = AVSpeechSynthesisVoice(
+                language: Locale.current.language.languageCode?.identifier ?? "en"
+               ) ?? voices.first {
                 settings.preferredVoiceId = defaultVoice.identifier
             }
+        }
+    }
+
+    private func voiceSlider(_ name: String, value: Binding<Double>) -> some View {
+        HStack {
+            Text(name).frame(width: 72, alignment: .leading)
+            Slider(value: value, in: 0...1, step: 0.05)
+            Text(String(format: "%.2f", value.wrappedValue))
+                .font(.caption.monospacedDigit())
+                .frame(width: 34)
         }
     }
 }
@@ -199,8 +287,10 @@ private struct LocalShortcutSettings: View {
 
 private struct LocalDataSettingsView: View {
     @ObservedObject private var store = DictationStore.shared
+    @ObservedObject private var library = LocalLibraryStore.shared
     @State private var confirmingClearHistory = false
     @State private var confirmingClearAudio = false
+    @State private var confirmingClearLibrary = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -226,7 +316,19 @@ private struct LocalDataSettingsView: View {
                 Button("Delete All History and Audio…", role: .destructive) { confirmingClearHistory = true }
             }
 
-            Label("History is stored in Application Support/VibeRead/dictations.sqlite3. Nothing is synced.", systemImage: "internaldrive")
+            SettingsSection(title: "Library") {
+                Text("\(library.items.count) saved item\(library.items.count == 1 ? "" : "s")")
+                    .foregroundColor(.secondary)
+                Button("Open Library Folder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([LocalLibraryStore.defaultFileURL])
+                }
+                Button("Delete Saved Library…", role: .destructive) {
+                    confirmingClearLibrary = true
+                }
+                .disabled(library.items.isEmpty)
+            }
+
+            Label("Dictation history and your Library are stored in Application Support/VibeRead. Nothing is synced.", systemImage: "internaldrive")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
@@ -242,6 +344,9 @@ private struct LocalDataSettingsView: View {
         }
         .confirmationDialog("Delete all dictation history and audio?", isPresented: $confirmingClearHistory) {
             Button("Delete Everything", role: .destructive) { store.clearAll() }
+        }
+        .confirmationDialog("Delete every saved Library item?", isPresented: $confirmingClearLibrary) {
+            Button("Delete Library", role: .destructive) { library.removeAll() }
         }
     }
 

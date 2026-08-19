@@ -408,9 +408,21 @@ class KeyboardShortcutService: ObservableObject {
 
             if fnPressed {
                 currentlyPressedKeys.insert(.fn)
-                // Wait for release before treating fn as an fn-alone action.
-                // This leaves time to complete fn+Space or another chord.
-                fnAloneCandidate = true
+                if DictationService.shared.isHandsFreeRecording,
+                   let shortcut = findMatchingShortcut(for: [.fn]),
+                   shortcut.action == .handsFree {
+                    // A second fn press finishes hands-free recording on
+                    // key-down. Some macOS configurations do not reliably
+                    // deliver the matching global key-up while recording.
+                    fnAloneCandidate = false
+                    DispatchQueue.main.async {
+                        self.onShortcutTriggered?(shortcut.action)
+                    }
+                } else {
+                    // Wait for release before treating the first fn press as
+                    // an fn-alone action. This leaves time for fn+Space.
+                    fnAloneCandidate = true
+                }
             } else {
                 // fn released
                 currentlyPressedKeys.remove(.fn)

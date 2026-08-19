@@ -4,6 +4,7 @@ import AppKit
 private enum LocalAppTab: String, CaseIterable, Identifiable {
     case dictation = "Dictate"
     case read = "Read"
+    case library = "Library"
     case actions = "Actions"
 
     var id: String { rawValue }
@@ -11,6 +12,7 @@ private enum LocalAppTab: String, CaseIterable, Identifiable {
         switch self {
         case .dictation: return "mic.fill"
         case .read: return "speaker.wave.2.fill"
+        case .library: return "bookmark.fill"
         case .actions: return "wand.and.stars"
         }
     }
@@ -45,10 +47,11 @@ struct MainView: View {
                 switch selection ?? .dictation {
                 case .dictation: DictationView()
                 case .read: LocalReadView()
+                case .library: LocalLibraryView()
                 case .actions: LocalActionsView()
                 }
 
-                if tts.isSpeaking || tts.isPaused {
+                if tts.isLoading || tts.isSpeaking || tts.isPaused {
                     InstantPlayerView().padding()
                 }
             }
@@ -70,13 +73,14 @@ struct MainView: View {
 
 struct LocalReadView: View {
     @ObservedObject private var tts = InstantTTSService.shared
+    @EnvironmentObject private var settings: AppSettings
     @State private var text = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Read aloud").font(.largeTitle.bold())
-                Text("Uses the voices built into macOS. Your text stays on this Mac.")
+                Text(readAloudDescription)
                     .foregroundColor(.secondary)
             }
 
@@ -91,6 +95,10 @@ struct LocalReadView: View {
                 Button("Paste from Clipboard") {
                     text = NSPasteboard.general.string(forType: .string) ?? ""
                 }
+                Button("Save to Library") {
+                    _ = LocalLibraryStore.shared.saveText(text)
+                }
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Spacer()
                 if tts.isSpeaking || tts.isPaused {
                     Button("Stop", role: .destructive) { tts.stop() }
@@ -99,9 +107,21 @@ struct LocalReadView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+
+            if let error = tts.error {
+                Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
         }
         .padding(36)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var readAloudDescription: String {
+        settings.readAloudProvider == .elevenLabs
+            ? "Reads with your ElevenLabs voice. Text goes directly to ElevenLabs when you press Read."
+            : "Reads with a voice built into macOS. Text stays on this Mac."
     }
 }
 
@@ -121,6 +141,27 @@ struct LocalActionsView: View {
                 Button("Add Action") { store.add() }
                     .buttonStyle(.borderedProminent)
             }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Built-in actions").font(.headline)
+                Text("Choose the useful actions that always appear before your custom prompts.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                HStack(spacing: 10) {
+                    ForEach(BuiltInPaletteAction.allCases) { action in
+                        Toggle(isOn: Binding(
+                            get: { store.isEnabled(action) },
+                            set: { store.setEnabled($0, for: action) }
+                        )) {
+                            Label(action.name, systemImage: action.icon)
+                        }
+                        .toggleStyle(.button)
+                    }
+                }
+            }
+            .padding(14)
+            .background(.thinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
 
             List {
                 ForEach($store.actions) { $action in
@@ -159,12 +200,18 @@ struct InstantPlayerView: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Button(action: tts.toggle) {
-                Image(systemName: tts.isPaused ? "play.fill" : "pause.fill")
+            if tts.isLoading {
+                ThinkingOrbView(size: 24)
+                    .frame(width: 28, height: 28)
+                    .accessibilityLabel("Generating voice")
+            } else {
+                Button(action: tts.toggle) {
+                    Image(systemName: tts.isPaused ? "play.fill" : "pause.fill")
+                }
+                .buttonStyle(.borderless)
             }
-            .buttonStyle(.borderless)
 
-            Text(tts.currentText ?? "Reading")
+            Text(tts.isLoading ? "Generating voice" : (tts.currentText ?? "Reading"))
                 .lineLimit(1)
                 .font(.caption)
             Spacer()
@@ -173,8 +220,8 @@ struct InstantPlayerView: View {
         }
         .padding(12)
         .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .shadow(radius: 4)
+        .clipShape(Capsule())
+        .shadow(color: .black.opacity(0.16), radius: 12, y: 5)
     }
 }
 

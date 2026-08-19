@@ -73,6 +73,19 @@ class DictationService: ObservableObject {
 
     private init() {}
 
+    /// Hands-free recording is a true toggle. The second fn press should stop
+    /// immediately instead of waiting for the key-up event, which macOS does
+    /// not always deliver consistently while a global recording is active.
+    var isHandsFreeRecording: Bool {
+        guard currentMode == .handsFree else { return false }
+        switch state {
+        case .recordingHandsFree, .recordingWarning:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Toggle dictation - start if idle, stop if recording (push-to-talk style)
     func toggle() {
         switch state {

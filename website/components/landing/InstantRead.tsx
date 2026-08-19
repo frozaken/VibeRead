@@ -15,7 +15,7 @@ export function InstantReadContent({ theme = "dark", compact = false }: InstantR
   const isLight = theme === "light";
   return (
     <div className="flex flex-col items-start text-left">
-        <Badge className={cn("mb-6 border-none", isLight ? "bg-slate-100 text-slate-900 hover:bg-slate-200" : "bg-[#FFFFEB] text-black hover:bg-white")}>Mac read aloud</Badge>
+        <Badge className={cn("mb-6 border-none", isLight ? "bg-slate-100 text-slate-900 hover:bg-slate-200" : "bg-[#FFFFEB] text-black hover:bg-white")}>Your voice</Badge>
         <h3 className={cn("font-display mb-8 leading-[1.1]",
             compact ? "text-3xl md:text-5xl" : "text-4xl md:text-7xl",
             isLight ? "text-slate-900" : "text-[#FFFFEB]")}>
@@ -24,9 +24,9 @@ export function InstantReadContent({ theme = "dark", compact = false }: InstantR
         <p className={cn("leading-relaxed mb-10 max-w-lg",
             compact ? "text-lg" : "text-xl",
             isLight ? "text-slate-600" : "text-[#FFFFEB]/70")}>
-          Select text, press your shortcut, and let macOS read it aloud. Vibe
-          Read uses the voices already on your Mac, and the shortcut can be
-          rebound in settings.
+          Select text, open a saved page, or paste a note. Use an ElevenLabs
+          voice when you want it, or keep everything offline with the voices
+          already on your Mac.
         </p>
         <div className="flex flex-col sm:flex-row gap-6 items-start sm:items-center">
             <div className="flex gap-4">

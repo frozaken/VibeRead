@@ -24,6 +24,8 @@ struct OverlayMenuView: View {
                     processingView
                 } else if actionService.lastOutput != nil {
                     resultView
+                } else if actionService.lastNotice != nil {
+                    noticeView
                 } else {
                     actionList
                 }
@@ -177,6 +179,19 @@ struct OverlayMenuView: View {
         .padding(12)
     }
 
+    private var noticeView: some View {
+        VStack(spacing: 14) {
+            Spacer()
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 32))
+                .foregroundColor(.green)
+            Text(actionService.lastNotice ?? "Done")
+                .font(.headline)
+            Button("Done") { controller.hide() }
+            Spacer()
+        }
+    }
+
     private var accessibilityBanner: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .top, spacing: 8) {
@@ -221,20 +236,20 @@ struct OverlayMenuView: View {
     }
 
     private var sourceText: String? {
-        if let selected = controller.currentContext?.selectedText,
-           !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return selected
-        }
-        if case .clipboard = controller.currentContext?.contextType,
-           let clipboard = NSPasteboard.general.string(forType: .string),
-           !clipboard.isEmpty {
-            return clipboard
-        }
-        return nil
+        guard let snapshot = controller.currentContext?.selectedText,
+              !snapshot.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return snapshot
+    }
+
+    private var sourceURL: URL? {
+        controller.currentContext?.browserURL
+            ?? sourceText.flatMap(ContentExtractionService.normalizedWebURL(from:))
     }
 
     private var sourceLabel: String {
         switch controller.currentContext?.contextType {
+        case .browser(let url):
+            return ContentExtractionService.kind(for: url).displayName
         case .textSelection: return "Selected text"
         case .clipboard: return "Copied clipboard text"
         default: return "Vibe Read actions"
@@ -293,18 +308,56 @@ struct OverlayMenuView: View {
     private var menuItems: [MenuItem] {
         var items: [MenuItem] = []
         if let text = sourceText {
-            items.append(MenuItem(
-                id: "read",
-                icon: "speaker.wave.2.fill",
-                title: "Read aloud",
-                action: { Task { await actionService.readSelection(text) } }
-            ))
-            items.append(MenuItem(
-                id: "copy",
-                icon: "doc.on.doc",
-                title: "Copy",
-                action: { actionService.copy(text) }
-            ))
+            let url = sourceURL
+            if actionStore.isEnabled(.readAloud) {
+                items.append(MenuItem(
+                    id: "read",
+                    icon: BuiltInPaletteAction.readAloud.icon,
+                    title: url == nil ? "Read aloud" : "Read this page",
+                    keepsOpen: url != nil,
+                    action: {
+                        if let url { actionService.readURL(url) }
+                        else { Task { await actionService.readSelection(text) } }
+                    }
+                ))
+            }
+            if actionStore.isEnabled(.saveToLibrary) {
+                items.append(MenuItem(
+                    id: "save",
+                    icon: BuiltInPaletteAction.saveToLibrary.icon,
+                    title: "Save to Library",
+                    keepsOpen: true,
+                    action: {
+                        if let url { actionService.saveURL(url) }
+                        else { actionService.saveSelection(text) }
+                    }
+                ))
+            }
+            if actionStore.isEnabled(.summarize) {
+                let summarize = LocalTextAction(
+                    name: "Summarize",
+                    prompt: "Summarize this clearly and accurately. Preserve important facts and names. Return only the summary."
+                )
+                items.append(MenuItem(
+                    id: "summarize",
+                    icon: BuiltInPaletteAction.summarize.icon,
+                    title: url == nil ? "Summarize" : "Summarize this page",
+                    keepsOpen: true,
+                    action: {
+                        if let url { actionService.summarizeURL(url) }
+                        else { actionService.run(summarize, on: text) }
+                    }
+                ))
+            }
+            if actionStore.isEnabled(.copy) {
+                items.append(MenuItem(
+                    id: "copy",
+                    icon: BuiltInPaletteAction.copy.icon,
+                    title: "Copy",
+                    keepsOpen: true,
+                    action: { actionService.copy(text) }
+                ))
+            }
 
             if !actionStore.actions.isEmpty {
                 items.append(.separator(id: "ai-separator"))
@@ -314,7 +367,10 @@ struct OverlayMenuView: View {
                         icon: "wand.and.stars",
                         title: action.name,
                         keepsOpen: true,
-                        action: { actionService.run(action, on: text) }
+                        action: {
+                            if let url { actionService.run(action, onURL: url) }
+                            else { actionService.run(action, on: text) }
+                        }
                     ))
                 }
             }
@@ -355,7 +411,9 @@ struct OverlayMenuView: View {
     }
 
     private func move(by delta: Int) {
-        guard !actionService.isProcessing, actionService.lastOutput == nil else { return }
+        guard !actionService.isProcessing,
+              actionService.lastOutput == nil,
+              actionService.lastNotice == nil else { return }
         let valid = menuItems.enumerated().filter {
             !$0.element.isSeparator && !$0.element.isDisabled
         }

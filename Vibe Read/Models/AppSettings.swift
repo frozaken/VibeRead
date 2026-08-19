@@ -12,6 +12,30 @@ final class AppSettings: ObservableObject {
     @Published var preferredVoiceId: String {
         didSet { defaults.set(preferredVoiceId, forKey: "preferredVoiceId") }
     }
+    @Published var readAloudProvider: ReadAloudProvider {
+        didSet { defaults.set(readAloudProvider.rawValue, forKey: "readAloudProvider") }
+    }
+    @Published var elevenLabsVoiceId: String {
+        didSet { defaults.set(elevenLabsVoiceId, forKey: "elevenLabsVoiceId") }
+    }
+    @Published var elevenLabsVoiceName: String {
+        didSet { defaults.set(elevenLabsVoiceName, forKey: "elevenLabsVoiceName") }
+    }
+    @Published var elevenLabsTTSModel: String {
+        didSet { defaults.set(elevenLabsTTSModel, forKey: "elevenLabsTTSModel") }
+    }
+    @Published var voiceStability: Double {
+        didSet { defaults.set(voiceStability, forKey: "voiceStability") }
+    }
+    @Published var voiceSimilarityBoost: Double {
+        didSet { defaults.set(voiceSimilarityBoost, forKey: "voiceSimilarityBoost") }
+    }
+    @Published var voiceStyle: Double {
+        didSet { defaults.set(voiceStyle, forKey: "voiceStyle") }
+    }
+    @Published var voiceSpeakerBoost: Bool {
+        didSet { defaults.set(voiceSpeakerBoost, forKey: "voiceSpeakerBoost") }
+    }
     @Published var voiceSpeed: Double {
         didSet { defaults.set(voiceSpeed, forKey: "voiceSpeed") }
     }
@@ -62,7 +86,26 @@ final class AppSettings: ObservableObject {
 
     private init() {
         themeMode = ThemeMode(rawValue: defaults.string(forKey: "themeMode") ?? "system") ?? .system
-        preferredVoiceId = defaults.string(forKey: "preferredVoiceId") ?? ""
+        let oldVoiceID = defaults.string(forKey: "preferredVoiceId") ?? ""
+        preferredVoiceId = oldVoiceID.contains(".") ? oldVoiceID : ""
+        let migratedElevenLabsVoiceID = defaults.string(forKey: "elevenLabsVoiceId")
+            ?? (oldVoiceID.contains(".") ? "21m00Tcm4TlvDq8ikWAM" : oldVoiceID)
+        elevenLabsVoiceId = migratedElevenLabsVoiceID.isEmpty
+            ? "21m00Tcm4TlvDq8ikWAM"
+            : migratedElevenLabsVoiceID
+        elevenLabsVoiceName = defaults.string(forKey: "elevenLabsVoiceName") ?? "Rachel"
+        elevenLabsTTSModel = defaults.string(forKey: "elevenLabsTTSModel")
+            ?? "eleven_multilingual_v2"
+        voiceStability = defaults.object(forKey: "voiceStability") as? Double ?? 0.5
+        voiceSimilarityBoost = defaults.object(forKey: "voiceSimilarityBoost") as? Double ?? 0.75
+        voiceStyle = defaults.object(forKey: "voiceStyle") as? Double ?? 0
+        voiceSpeakerBoost = defaults.object(forKey: "voiceSpeakerBoost") as? Bool ?? true
+        let hasConfiguredElevenLabs = defaults.bool(
+            forKey: "provider.v2.credential.elevenLabs.configured"
+        )
+        readAloudProvider = ReadAloudProvider(
+            rawValue: defaults.string(forKey: "readAloudProvider") ?? ""
+        ) ?? (hasConfiguredElevenLabs ? .elevenLabs : .macOS)
         voiceSpeed = defaults.object(forKey: "voiceSpeed") as? Double ?? 1
         speedBoostMultiplier = defaults.object(forKey: "speedBoostMultiplier") as? Double ?? 1.5
         dictationHotkeyEnabled = defaults.object(forKey: "dictationHotkeyEnabled") as? Bool ?? true
@@ -141,6 +184,20 @@ final class AppSettings: ObservableObject {
             .init(keys: [.command, .shift, .e], action: .readSelection),
             .init(keys: [.command, .shift, .space], action: .toggleReadAloud)
         ]
+    }
+}
+
+enum ReadAloudProvider: String, CaseIterable, Codable, Identifiable {
+    case elevenLabs
+    case macOS
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .elevenLabs: return "ElevenLabs"
+        case .macOS: return "macOS"
+        }
     }
 }
 

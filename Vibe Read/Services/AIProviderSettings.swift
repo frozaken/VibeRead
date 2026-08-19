@@ -890,6 +890,11 @@ final class AIProviderSettings: ObservableObject {
 
     func saveElevenLabsAPIKey(_ value: String) throws { try saveAPIKey(value, for: .elevenLabs) }
     func clearElevenLabsAPIKey() throws { try clearAPIKey(for: .elevenLabs) }
+    /// Reads the ElevenLabs credential only after a user explicitly starts
+    /// speech generation, refreshes voices, or previews a voice.
+    func elevenLabsAPIKeyForExplicitUse() throws -> String {
+        try requiredSecret(for: .elevenLabs)
+    }
     func saveTextAPIKey(_ value: String) throws {
         try saveAPIKey(value, for: textActionProvider.credential)
     }

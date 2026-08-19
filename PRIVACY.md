@@ -13,12 +13,14 @@ document describes the current app's data flow.
 - Dictation recordings are stored beside that database and deleted after seven
   days by default. The user can choose immediate, one-day, seven-day, 30-day,
   or indefinite retention.
+- Saved text, extracted pages, summaries, and bookmarks are stored in
+  `library.json` under the same local Application Support directory.
 - Shortcuts, provider choices, provider URL and model identifiers, dictation
   language, vocabulary, retention choice, and user-defined action prompts are
   stored in macOS preferences.
 - API keys are stored in macOS Keychain. Groq, OpenRouter, and OpenAI each use
-  one provider item that can power dictation and Cmd + E. ElevenLabs uses a
-  dictation-only item. Custom dictation and custom text actions use separate
+  one provider item that can power dictation and Cmd + E. ElevenLabs uses one
+  item for dictation and optional read-aloud. Custom dictation and custom text actions use separate
   Keychain items.
 
 Launching Vibe Read and opening Settings do not read Keychain. The app reads a
@@ -96,9 +98,17 @@ that apply to your account.
 The app's provider client disables URL caching and cookies for these requests.
 This does not control what a provider retains after receiving a request.
 
-Read-aloud uses the macOS speech synthesizer locally. Copying, pasting, opening
-the action palette, and editing action definitions do not by themselves send a
-network request.
+Read-aloud uses the macOS speech synthesizer locally by default. When the user
+selects ElevenLabs read-aloud and presses Read or Preview, the chosen text is
+sent directly to ElevenLabs and generated audio is returned to the Mac.
+Choosing Load My Voices makes a direct authenticated voice-list request but
+does not send reading text.
+
+Saving or reading a copied web address fetches that page directly from the
+Mac. YouTube support requests public metadata and captions. Vibe Read does not
+use AppleScript, browser automation, or a Vibe Read proxy for these workflows.
+Copying, pasting, opening the action palette, and editing action definitions do
+not by themselves send a network request.
 
 ## Not included
 

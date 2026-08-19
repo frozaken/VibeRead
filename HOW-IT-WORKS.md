@@ -16,7 +16,8 @@ Dictation and Cmd + E are configured independently.
 
 Vibe Read stores one API key for each built-in provider in macOS Keychain. If
 Groq, OpenRouter, or OpenAI is selected for both dictation and Cmd + E, both
-features use that provider's saved key. ElevenLabs is dictation-only. Custom
+features use that provider's saved key. ElevenLabs can power both Scribe
+dictation and optional ElevenLabs read-aloud. Custom
 dictation and custom text actions have separate endpoint URLs and Keychain
 items. Provider choices, model identifiers, language, and custom endpoint URLs
 are non-secret preferences stored by macOS.
@@ -56,9 +57,11 @@ the configured providers.
 
 ## Read-aloud
 
-Read-aloud uses `AVSpeechSynthesizer` and voices installed in macOS. Text entered
-in the Read view or captured from another app stays on the Mac and is not sent
-to the configured AI provider.
+Read-aloud has two explicit modes. The macOS mode uses `AVSpeechSynthesizer`
+and keeps text on the Mac. The ElevenLabs mode sends only the text the user
+chooses to read directly to ElevenLabs, downloads generated audio, and plays it
+locally. Voice loading, preview, and reading are explicit actions and are the
+only times read-aloud accesses the saved ElevenLabs key.
 
 ## Text actions
 
@@ -72,6 +75,12 @@ optional, so local actions remain available without one.
 Action definitions and shortcuts are stored in macOS preferences. Selected
 text is not added to dictation history.
 
+When the current selection or clipboard contains a web address, Cmd + E can
+extract a readable article or Wikipedia page, or use public YouTube captions.
+It does not automate the browser or request Apple Events access. Save to
+Library writes the extracted text or link to `library.json` under the local
+Application Support directory.
+
 ## Storage and network boundary
 
 ```text
@@ -81,7 +90,8 @@ Microphone -> selected dictation provider -> raw transcript -> local SQLite
                                                          text provider
 
 Selected text -> optional Cmd + E text provider -> preview -> explicit apply
-Text to read  -> macOS speech synthesizer
+Text to read  -> macOS speech synthesizer or chosen ElevenLabs voice
+Copied URL    -> direct page fetch -> local Library
 ```
 
 The current app has no account system, subscriptions, analytics, cloud

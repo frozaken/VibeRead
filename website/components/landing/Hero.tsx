@@ -16,7 +16,7 @@ export function Hero() {
         className="max-w-5xl mx-auto flex flex-col items-center relative z-10"
       >
         <h1 className="text-[10vw] sm:text-[8vw] md:text-[4rem] leading-none md:leading-none font-display font-normal text-slate-900 mb-8 tracking-tighter max-w-5xl px-2 md:px-0">
-          <span className="text-slate-900/55 select-none font-classic">Stop typing,</span> start talking.
+          <span className="text-slate-900/30 select-none font-classic">Stop typing,</span> start talking.
         </h1>
 
         <p className="text-base md:text-xl text-slate-600 max-w-2xl mb-12 leading-relaxed font-light px-4">

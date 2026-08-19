@@ -8,7 +8,7 @@ if git ls-files | grep -Eq '(^|/)(\.env($|\.)|.*\.(p8|p12|mobileprovision)$)'; t
   exit 1
 fi
 
-secret_pattern='(sk-(live|test|proj|or-v1)-?[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|phc_[A-Za-z0-9]{20,}|sb_(secret|publishable)_[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})'
+secret_pattern='(sk-(live|test|proj|or-v1)-?[A-Za-z0-9_-]{20,}|sk_[A-Za-z0-9_-]{20,}|xi-[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|phc_[A-Za-z0-9]{20,}|sb_(secret|publishable)_[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})'
 
 if git grep -nEI "$secret_pattern" -- . \
   ':(exclude)scripts/check-secrets.sh'; then

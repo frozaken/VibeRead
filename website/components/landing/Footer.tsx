@@ -9,7 +9,7 @@ export function Footer() {
     <footer className="py-24 px-6 border-t border-black/5 bg-[#FFFFEB]">
       <div className="container mx-auto">
           <div className="flex flex-col items-center justify-center pt-12">
-              <p className="text-[12vw] md:text-[15vw] leading-none font-display font-medium tracking-tight mb-12 select-none text-slate-900">
+              <p className="text-[12vw] md:text-[15vw] leading-none font-display tracking-tight mb-12 select-none text-slate-900">
                   Vibe Read
               </p>
 

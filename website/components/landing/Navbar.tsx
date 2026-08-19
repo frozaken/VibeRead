@@ -18,7 +18,7 @@ export function Navbar() {
             <div className="relative w-10 h-10 overflow-hidden group-hover:scale-105 transition-transform duration-300">
               <img src="/apple-icon.png" alt="Vibe Read" className="w-full h-full object-cover" />
             </div>
-            <span className="font-display text-2xl font-bold tracking-tight text-slate-900">Vibe Read</span>
+            <span className="font-display text-2xl tracking-tight text-slate-900">Vibe Read</span>
           </Link>
 
           <div className="hidden md:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 items-center gap-8 text-sm font-medium text-slate-600">

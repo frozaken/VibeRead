@@ -3,9 +3,9 @@
 
 @theme inline {
   --font-sans: var(--font-inter);
-  --font-serif: var(--font-fraunces);
-  --font-display: var(--font-instrument);
-  --font-classic: var(--font-eb-garamond);
+  --font-serif: var(--font-fraunces), Georgia, serif;
+  --font-display: var(--font-instrument), Georgia, serif;
+  --font-classic: var(--font-eb-garamond), Georgia, serif;
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -118,6 +118,25 @@
     @apply bg-background text-foreground antialiased;
     overflow-x: clip;
   }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-instrument), Georgia, serif;
+    font-weight: 400;
+    font-synthesis: none;
+  }
+}
+
+/* Instrument Serif only ships at its original 400 weight. Prevent utility
+   classes from manufacturing a heavier face that changes the old identity. */
+.font-display {
+  font-weight: 400;
+  font-synthesis: none;
+}
+
+.font-classic {
+  font-synthesis: none;
 }
 
 html {

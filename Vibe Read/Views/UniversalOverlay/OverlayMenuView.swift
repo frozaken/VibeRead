@@ -100,7 +100,9 @@ struct OverlayMenuView: View {
     private var processingView: some View {
         VStack(spacing: 18) {
             Spacer(minLength: 8)
-            ThinkingOrbView(size: 58)
+            ProgressView()
+                .controlSize(.regular)
+                .frame(width: 32, height: 32)
                 .accessibilityLabel("Running text action")
             Text("Running with your provider")
                 .font(.system(size: 13, weight: .medium))

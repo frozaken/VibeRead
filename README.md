@@ -219,7 +219,6 @@ The tests do not migrate or clean your real dictation history.
 - [Local data](LOCAL_DATA.md)
 - [Privacy](PRIVACY.md)
 - [Security](SECURITY.md)
-- [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [Contributing](CONTRIBUTING.md)
 - [Static website](website/README.md)
 

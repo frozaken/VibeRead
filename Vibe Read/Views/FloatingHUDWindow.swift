@@ -83,8 +83,8 @@ class FloatingHUDController: NSObject, ObservableObject {
     private let dictationWidth: CGFloat = 140
     private let dictationPillHeight: CGFloat = 32
     private let dictationWindowHeight: CGFloat = 90  // Extra space for overlays above
-    // Transcribing sphere - perfect circle
-    private let transcribingSphereSize: CGFloat = 44
+    // Processing is normally brief, so keep this as quiet as the original HUD.
+    private let transcribingSphereSize: CGFloat = 32
     // Cancelled/undo pill (minimal)
     private let cancelledWidth: CGFloat = 220
     private let cancelledHeight: CGFloat = 40
@@ -912,11 +912,19 @@ struct PillIndicatorView: View {
         DictationRecordingContentView(mode: mode)
     }
 
-    // MARK: - Transcribing Sphere
+    // MARK: - Transcribing Indicator
 
     private var transcribingSpherePill: some View {
-        ThinkingOrbView(size: 30)
-            .frame(width: 44, height: 44)
+        ProgressView()
+            .controlSize(.small)
+            .frame(width: 32, height: 32)
+            .background(
+                Circle()
+                    .fill(.ultraThinMaterial)
+                    .shadow(color: .black.opacity(0.12), radius: 5, y: 2)
+            )
+            .accessibilityLabel("Processing dictation")
+            .allowsHitTesting(false)
     }
 
     // MARK: - Recording Warning Pill (time limit approaching)

@@ -205,7 +205,8 @@ struct InstantPlayerView: View {
     var body: some View {
         HStack(spacing: 14) {
             if tts.isLoading {
-                ThinkingOrbView(size: 24)
+                ProgressView()
+                    .controlSize(.small)
                     .frame(width: 28, height: 28)
                     .accessibilityLabel("Generating voice")
             } else {

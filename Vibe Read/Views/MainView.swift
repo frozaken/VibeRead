@@ -20,40 +20,82 @@ private enum LocalAppTab: String, CaseIterable, Identifiable {
 
 struct MainView: View {
     @ObservedObject private var tts = InstantTTSService.shared
-    @State private var selection: LocalAppTab? = .dictation
+    @State private var selection: LocalAppTab = .dictation
+    @State private var isSidebarCollapsed = false
+    @State private var showConfetti = false
     @State private var showingSettings = false
     @State private var settingsStartsOnProvider = false
     @State private var checkedProviderSetup = false
 
     var body: some View {
-        NavigationSplitView {
-            List(LocalAppTab.allCases, selection: $selection) { tab in
-                Label(tab.rawValue, systemImage: tab.icon).tag(tab)
+        ZStack {
+            HStack(alignment: .top, spacing: 0) {
+                LocalSidebarView(
+                    isCollapsed: $isSidebarCollapsed,
+                    selection: $selection,
+                    showConfetti: $showConfetti,
+                    onOpenSettings: openSettings
+                )
+                .frame(
+                    width: isSidebarCollapsed ? 60 : AppTheme.Dimensions.sidebarWidth,
+                    alignment: .leading
+                )
+                .clipped()
+
+                ZStack(alignment: .bottom) {
+                    AppTheme.Colors.contentBackground
+                        .clipShape(RoundedRectangle(
+                            cornerRadius: AppTheme.Dimensions.contentCornerRadius,
+                            style: .continuous
+                        ))
+                        .shadow(color: .black.opacity(0.08), radius: 3, y: 1)
+
+                    contentViews
+                        .clipShape(RoundedRectangle(
+                            cornerRadius: AppTheme.Dimensions.contentCornerRadius,
+                            style: .continuous
+                        ))
+
+                    if tts.isLoading || tts.isSpeaking || tts.isPaused {
+                        InstantPlayerView()
+                            .padding(20)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .padding(.trailing, AppTheme.Dimensions.contentPadding)
             }
-            .navigationTitle("Vibe Read")
-            .safeAreaInset(edge: .bottom) {
-                Button(action: {
-                    settingsStartsOnProvider = false
-                    showingSettings = true
-                }) {
-                    Label("Settings", systemImage: "gear")
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, AppTheme.Dimensions.contentPadding)
+
+            ConfettiView(isActive: $showConfetti)
+        }
+        .tint(AppTheme.Colors.brandAccent)
+        .background(AppTheme.Colors.sidebarBackground)
+        .toolbarBackground(AppTheme.Colors.sidebarBackground, for: .windowToolbar)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSidebarCollapsed)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        isSidebarCollapsed.toggle()
+                    }
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .padding()
+                .help(isSidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar")
+                .accessibilityLabel(isSidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar")
             }
-        } detail: {
-            ZStack(alignment: .bottom) {
-                switch selection ?? .dictation {
-                case .dictation: DictationView()
-                case .read: LocalReadView()
-                case .library: LocalLibraryView()
-                case .actions: LocalActionsView()
-                }
 
-                if tts.isLoading || tts.isSpeaking || tts.isPaused {
-                    InstantPlayerView().padding()
+            ToolbarItem(placement: .automatic) {
+                Button(action: openSettings) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
+                .help("Settings")
             }
         }
         .sheet(isPresented: $showingSettings) {
@@ -72,6 +114,178 @@ struct MainView: View {
             settingsStartsOnProvider = true
             showingSettings = true
         }
+    }
+
+    private func openSettings() {
+        settingsStartsOnProvider = false
+        showingSettings = true
+    }
+
+    private var contentViews: some View {
+        ZStack {
+            DictationView()
+                .opacity(selection == .dictation ? 1 : 0)
+                .allowsHitTesting(selection == .dictation)
+                .accessibilityHidden(selection != .dictation)
+
+            LocalReadView()
+                .opacity(selection == .read ? 1 : 0)
+                .allowsHitTesting(selection == .read)
+                .accessibilityHidden(selection != .read)
+
+            LocalLibraryView()
+                .opacity(selection == .library ? 1 : 0)
+                .allowsHitTesting(selection == .library)
+                .accessibilityHidden(selection != .library)
+
+            LocalActionsView()
+                .opacity(selection == .actions ? 1 : 0)
+                .allowsHitTesting(selection == .actions)
+                .accessibilityHidden(selection != .actions)
+        }
+    }
+}
+
+private struct LocalSidebarView: View {
+    @Binding var isCollapsed: Bool
+    @Binding var selection: LocalAppTab
+    @Binding var showConfetti: Bool
+    let onOpenSettings: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var logoPressed = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Button(action: celebrate) {
+                HStack(spacing: 10) {
+                    Image(nsImage: NSImage(named: "AppIcon") ?? NSImage())
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 24, height: 24)
+                        .scaleEffect(logoPressed ? 0.9 : 1)
+
+                    if !isCollapsed {
+                        Text("Vibe Read")
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .transition(.opacity.combined(with: .move(edge: .leading)))
+
+                        Spacer(minLength: 0)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, isCollapsed ? 0 : 20)
+            .padding(.top, 8)
+            .padding(.bottom, 16)
+            .help("Celebrate")
+            .accessibilityLabel("Vibe Read logo")
+            .accessibilityHint("Celebrate with confetti")
+
+            VStack(spacing: 4) {
+                ForEach(LocalAppTab.allCases) { tab in
+                    LocalSidebarButton(
+                        title: tab.rawValue,
+                        icon: tab.icon,
+                        isSelected: selection == tab,
+                        isCollapsed: isCollapsed
+                    ) {
+                        selection = tab
+                    }
+                }
+            }
+            .padding(.horizontal, isCollapsed ? 12 : 10)
+
+            Spacer()
+
+            LocalSidebarButton(
+                title: "Settings",
+                icon: "gearshape",
+                isSelected: false,
+                isCollapsed: isCollapsed,
+                action: onOpenSettings
+            )
+            .padding(.horizontal, isCollapsed ? 12 : 10)
+            .padding(.bottom, 16)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AppTheme.Colors.sidebarBackground)
+    }
+
+    private func celebrate() {
+        showConfetti = false
+        if !reduceMotion {
+            withAnimation(.spring(response: 0.18, dampingFraction: 0.55)) {
+                logoPressed = true
+            }
+        }
+        DispatchQueue.main.async {
+            showConfetti = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.58)) {
+                logoPressed = false
+            }
+        }
+    }
+}
+
+private struct LocalSidebarButton: View {
+    let title: String
+    let icon: String
+    let isSelected: Bool
+    let isCollapsed: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
+                    .frame(width: 20)
+
+                if !isCollapsed {
+                    Text(title)
+                        .font(.system(size: 14, weight: isSelected ? .medium : .regular))
+                        .lineLimit(1)
+                        .transition(.opacity.combined(with: .move(edge: .leading)))
+
+                    Spacer(minLength: 0)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(buttonBackground)
+                    .shadow(
+                        color: isSelected ? .black.opacity(0.07) : .clear,
+                        radius: 1,
+                        y: 1
+                    )
+            }
+            .foregroundStyle(isSelected ? AppTheme.Colors.sidebarTextSelected : AppTheme.Colors.sidebarText)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(isCollapsed ? title : "")
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private var buttonBackground: Color {
+        if isSelected { return AppTheme.Colors.contentBackground }
+        if isHovered { return Color.primary.opacity(0.055) }
+        return .clear
     }
 }
 

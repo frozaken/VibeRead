@@ -36,6 +36,15 @@ struct AppTheme {
         static var border: Color {
             Color.primary.opacity(0.1)
         }
+
+        static var brandAccent: Color {
+            Color(nsColor: NSColor(name: "VibeReadAccent", dynamicProvider: { appearance in
+                if appearance.name == .darkAqua {
+                    return NSColor(calibratedRed: 0.74, green: 0.66, blue: 0.96, alpha: 1)
+                }
+                return NSColor(calibratedRed: 0.43, green: 0.31, blue: 0.70, alpha: 1)
+            }))
+        }
     }
 
     struct Dimensions {

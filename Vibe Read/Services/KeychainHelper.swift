@@ -28,10 +28,12 @@ final class KeychainHelper {
 
     /// Namespace secrets by the installed app rather than a hosted-service
     /// identifier, so independently built forks do not share Keychain items.
-    /// Version 2 intentionally does not discover or reuse keys created by old
-    /// builds or external tooling. Users add each key explicitly in Settings.
+    /// Version 3 intentionally does not discover or reuse keys created by old
+    /// ad hoc builds. Those items can be bound to the previous executable and
+    /// make macOS show a password dialog after an app replacement. Users add
+    /// each key explicitly once for this installed build.
     private var service: String {
-        "\(Bundle.main.bundleIdentifier ?? "VibeRead").local-provider-secrets.v2"
+        "\(Bundle.main.bundleIdentifier ?? "VibeRead").local-provider-secrets.v3"
     }
 
     private init() {}

@@ -38,7 +38,7 @@ private struct ProviderCredentialStatusLabel: View {
                 switch status {
                 case .configured:
                     Label(
-                        "API key saved. It is read only when you verify or use this provider.",
+                        "API key saved for this build. It is read only when you verify or use this provider.",
                         systemImage: "checkmark.circle"
                     )
                     .foregroundColor(.secondary)
@@ -181,7 +181,7 @@ struct ProviderConfigurationSettingsView: View {
             }
 
             Label(
-                "Keys stay in macOS Keychain. Audio goes directly to the dictation provider. Selected text and optional transcript cleanup go directly to the Cmd + E provider. Vibe Read has no relay or cloud database.",
+                "Keys stay in macOS Keychain. Rebuilt apps ask you to save the key once for their new local identity. Audio and text then go directly to the providers you choose. Vibe Read has no relay or cloud database.",
                 systemImage: "hand.raised.fill"
             )
             .font(.caption)

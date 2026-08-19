@@ -155,7 +155,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         shortcutService = service
 
         service.onPushToTalkStart = {
-            Task { @MainActor in DictationService.shared.startPushToTalk() }
+            Task { @MainActor in
+                guard Self.ensureDictationIsConfigured() else { return }
+                DictationService.shared.startPushToTalk()
+            }
         }
         service.onPushToTalkEnd = {
             Task { @MainActor in DictationService.shared.endPushToTalk() }
@@ -164,10 +167,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 switch action {
                 case .handsFree:
+                    guard Self.ensureDictationIsConfigured() else { return }
                     DictationService.shared.toggleHandsFree()
                 case .pushToTalk:
                     break
                 case .commandMode:
+                    guard Self.ensureDictationIsConfigured() else { return }
                     DictationService.shared.toggleCommandMode()
                 case .pasteLastTranscript:
                     UniversalActionService.shared.pasteLastDictation()
@@ -196,6 +201,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         InstantTTSService.shared.speak(text)
+    }
+
+    /// Stop before recording when a fresh local build has no provider key.
+    /// This avoids recording audio only to fail after the user presses Send.
+    private static func ensureDictationIsConfigured() -> Bool {
+        guard AIProviderSettings.shared.needsDictationSetup else { return true }
+        NSApp.activate(ignoringOtherApps: true)
+        NotificationCenter.default.post(name: .showProviderSettings, object: nil)
+        NSSound.beep()
+        return false
     }
 
     static func toggleActionPalette(prefilledText: String? = nil) {
@@ -245,4 +260,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension Notification.Name {
     static let pasteFromClipboard = Notification.Name("pasteFromClipboard")
     static let readSelectedText = Notification.Name("readSelectedText")
+    static let showProviderSettings = Notification.Name("showProviderSettings")
 }

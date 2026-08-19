@@ -413,7 +413,7 @@ final class AIProviderSettings: ObservableObject {
         static let legacyTranscriptionModel = "aiProviderTranscriptionModel"
         static let legacyTextModel = "aiProviderTextModel"
         static func credentialConfigured(_ credential: ProviderCredential) -> String {
-            "provider.v2.credential.\(credential.rawValue).configured"
+            "provider.v3.credential.\(credential.rawValue).configured"
         }
     }
 

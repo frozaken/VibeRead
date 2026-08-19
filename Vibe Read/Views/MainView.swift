@@ -68,6 +68,10 @@ struct MainView: View {
                 showingSettings = true
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .showProviderSettings)) { _ in
+            settingsStartsOnProvider = true
+            showingSettings = true
+        }
     }
 }
 

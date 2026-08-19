@@ -430,6 +430,15 @@ class KeyboardShortcutService: ObservableObject {
                 // End push-to-talk if active
                 if isPushToTalkActive {
                     endPushToTalk()
+                } else if DictationService.shared.isHandsFreeRecording,
+                          let shortcut = findMatchingShortcut(for: [.fn]),
+                          shortcut.action == .handsFree {
+                    // Also finish on the second release. This catches the
+                    // macOS path where a modifier-down transition is
+                    // coalesced while the nonactivating HUD is visible.
+                    DispatchQueue.main.async {
+                        self.onShortcutTriggered?(shortcut.action)
+                    }
                 } else if fnAloneCandidate,
                           let shortcut = findMatchingShortcut(for: [.fn]),
                           shortcut.action != .pushToTalk {

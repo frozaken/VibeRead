@@ -20,6 +20,8 @@ struct MainView: View {
     @ObservedObject private var tts = InstantTTSService.shared
     @State private var selection: LocalAppTab? = .dictation
     @State private var showingSettings = false
+    @State private var settingsStartsOnProvider = false
+    @State private var checkedProviderSetup = false
 
     var body: some View {
         NavigationSplitView {
@@ -28,7 +30,10 @@ struct MainView: View {
             }
             .navigationTitle("Vibe Read")
             .safeAreaInset(edge: .bottom) {
-                Button(action: { showingSettings = true }) {
+                Button(action: {
+                    settingsStartsOnProvider = false
+                    showingSettings = true
+                }) {
                     Label("Settings", systemImage: "gear")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -49,7 +54,16 @@ struct MainView: View {
             }
         }
         .sheet(isPresented: $showingSettings) {
-            SettingsView().dismissableSheet()
+            SettingsView(startsOnProvider: settingsStartsOnProvider)
+                .dismissableSheet()
+        }
+        .onAppear {
+            guard !checkedProviderSetup else { return }
+            checkedProviderSetup = true
+            if AIProviderSettings.shared.needsDictationSetup {
+                settingsStartsOnProvider = true
+                showingSettings = true
+            }
         }
     }
 }

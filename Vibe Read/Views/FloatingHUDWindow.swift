@@ -1,6 +1,28 @@
 import SwiftUI
 import AppKit
 import Combine
+import ApplicationServices
+
+/// Invalidates delayed work from an older HUD presentation.
+///
+/// Timers and AppKit animation completion handlers cannot always be cancelled
+/// after they have been enqueued. Capturing this token makes those callbacks
+/// harmless as soon as a newer presentation begins.
+struct HUDPresentationTokenGuard: Sendable {
+    typealias Token = UInt64
+
+    private(set) var currentToken: Token = 0
+
+    @discardableResult
+    mutating func beginPresentation() -> Token {
+        currentToken &+= 1
+        return currentToken
+    }
+
+    func isCurrent(_ token: Token) -> Bool {
+        token == currentToken
+    }
+}
 
 /// Minimal pill indicator - top center of screen
 /// Shows only when generating/playing, disappears when idle
@@ -9,10 +31,12 @@ import Combine
 class FloatingHUDController: NSObject, ObservableObject {
     static let shared = FloatingHUDController()
 
-    private var window: NSWindow?
+    private var window: NSPanel?
     private var hostingView: NSHostingView<AnyView>?
     private var cancellables = Set<AnyCancellable>()
     private var hideTimer: Timer?
+    private var currentVisualSize = CGSize(width: 48, height: 28)
+    private var presentationGuard = HUDPresentationTokenGuard()
 
     enum HUDState: Equatable {
         case hidden
@@ -60,7 +84,7 @@ class FloatingHUDController: NSObject, ObservableObject {
     private let dictationPillHeight: CGFloat = 32
     private let dictationWindowHeight: CGFloat = 90  // Extra space for overlays above
     // Transcribing sphere - perfect circle
-    private let transcribingSphereSize: CGFloat = 32
+    private let transcribingSphereSize: CGFloat = 44
     // Cancelled/undo pill (minimal)
     private let cancelledWidth: CGFloat = 220
     private let cancelledHeight: CGFloat = 40
@@ -75,6 +99,9 @@ class FloatingHUDController: NSObject, ObservableObject {
     private let ttsPlayerHeight: CGFloat = 32
     // Bottom padding above dock
     private let bottomPadding: CGFloat = 8
+    // Give SwiftUI materials, borders, and shadows real pixels outside the pill.
+    // The visible control still sits at `bottomPadding` above the work area.
+    private let contentPadding: CGFloat = 12
 
     private var escapeMonitor: Any?
     private var speedBoostMonitor: Any?
@@ -83,6 +110,7 @@ class FloatingHUDController: NSObject, ObservableObject {
         super.init()
         createWindow()
         observeTTSState()
+        observeWindowEnvironment()
         setupKeyMonitors()
     }
 
@@ -147,13 +175,16 @@ class FloatingHUDController: NSObject, ObservableObject {
     private func createWindow() {
         let pillView = PillIndicatorView()
             .environmentObject(self)
+            .padding(contentPadding)
 
         hostingView = NSHostingView(rootView: AnyView(pillView))
-        hostingView?.frame = NSRect(x: 0, y: 0, width: compactWidth, height: compactHeight)
+        let initialWindowSize = paddedWindowSize(for: currentVisualSize)
+        hostingView?.frame = NSRect(origin: .zero, size: initialWindowSize)
+        hostingView?.autoresizingMask = [.width, .height]
 
-        window = NSWindow(
+        window = NSPanel(
             contentRect: hostingView!.frame,
-            styleMask: [.borderless],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -162,45 +193,166 @@ class FloatingHUDController: NSObject, ObservableObject {
         window?.isOpaque = false
         window?.backgroundColor = .clear
         window?.level = .floating
-        window?.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        window?.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         window?.isReleasedWhenClosed = false
+        window?.isFloatingPanel = true
+        window?.hidesOnDeactivate = false
+        window?.becomesKeyOnlyIfNeeded = true
+        window?.animationBehavior = .none
         window?.hasShadow = true
         window?.ignoresMouseEvents = true // Click-through by default
 
-        positionWindow()
+        applyWindowLayout()
     }
 
     private func updateWindowSize(expanded: Bool) {
-        guard let window = window, let hostingView = hostingView else { return }
-
-        let newWidth = expanded ? expandedWidth : compactWidth
-        let newHeight = expanded ? expandedHeight : compactHeight
-
-        // Calculate new origin to keep centered at bottom
-        guard let screen = NSScreen.main else { return }
-        let visibleFrame = screen.visibleFrame  // Excludes dock and menu bar
-        let newX = visibleFrame.midX - (newWidth / 2)
-        let newY = visibleFrame.minY + bottomPadding  // Just above dock
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(
-                NSRect(x: newX, y: newY, width: newWidth, height: newHeight),
-                display: true
-            )
-        }
-
-        hostingView.frame.size = CGSize(width: newWidth, height: newHeight)
+        currentVisualSize = CGSize(
+            width: expanded ? expandedWidth : compactWidth,
+            height: expanded ? expandedHeight : compactHeight
+        )
     }
 
-    private func positionWindow() {
-        guard let screen = NSScreen.main else { return }
-        let visibleFrame = screen.visibleFrame  // Excludes dock and menu bar
-        let width = state == .playing ? expandedWidth : compactWidth
-        let x = visibleFrame.midX - (width / 2)
-        let y = visibleFrame.minY + bottomPadding  // Just above dock
-        window?.setFrameOrigin(NSPoint(x: x, y: y))
+    /// Prefer the display containing the focused app window. This follows a
+    /// keyboard-driven workflow across displays and Spaces even when the mouse
+    /// has not moved yet. Pointer location remains the permission-free fallback.
+    private func targetScreen() -> NSScreen? {
+        if let focusedWindowFrame = focusedWindowFrameInQuartzCoordinates(),
+           let focusedScreen = screenWithLargestIntersection(with: focusedWindowFrame) {
+            return focusedScreen
+        }
+
+        let mouseLocation = NSEvent.mouseLocation
+        return NSScreen.screens.first { $0.frame.contains(mouseLocation) }
+            ?? window?.screen
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+    }
+
+    /// Accessibility window coordinates and CGDisplayBounds both use the
+    /// global Quartz coordinate space. Matching them directly avoids fragile
+    /// top-left versus bottom-left conversions for vertically arranged screens.
+    private func focusedWindowFrameInQuartzCoordinates() -> CGRect? {
+        guard AXIsProcessTrusted() else { return nil }
+
+        let systemWideElement = AXUIElementCreateSystemWide()
+        var focusedApplicationValue: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            systemWideElement,
+            kAXFocusedApplicationAttribute as CFString,
+            &focusedApplicationValue
+        ) == .success,
+        let focusedApplicationValue,
+        CFGetTypeID(focusedApplicationValue) == AXUIElementGetTypeID() else {
+            return nil
+        }
+        let focusedApplication = focusedApplicationValue as! AXUIElement
+
+        var focusedWindowValue: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            focusedApplication,
+            kAXFocusedWindowAttribute as CFString,
+            &focusedWindowValue
+        ) == .success,
+        let focusedWindowValue,
+        CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID() else {
+            return nil
+        }
+        let focusedWindow = focusedWindowValue as! AXUIElement
+
+        var positionValue: AnyObject?
+        var sizeValue: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            focusedWindow,
+            kAXPositionAttribute as CFString,
+            &positionValue
+        ) == .success,
+        AXUIElementCopyAttributeValue(
+            focusedWindow,
+            kAXSizeAttribute as CFString,
+            &sizeValue
+        ) == .success,
+        let positionValue,
+        let sizeValue,
+        CFGetTypeID(positionValue) == AXValueGetTypeID(),
+        CFGetTypeID(sizeValue) == AXValueGetTypeID() else {
+            return nil
+        }
+
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
+              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size),
+              size.width > 0,
+              size.height > 0 else {
+            return nil
+        }
+        return CGRect(origin: position, size: size)
+    }
+
+    private func screenWithLargestIntersection(with windowFrame: CGRect) -> NSScreen? {
+        let matches = NSScreen.screens.compactMap { screen -> (NSScreen, CGFloat)? in
+            let key = NSDeviceDescriptionKey("NSScreenNumber")
+            guard let screenNumber = screen.deviceDescription[key] as? NSNumber else {
+                return nil
+            }
+            let displayBounds = CGDisplayBounds(CGDirectDisplayID(screenNumber.uint32Value))
+            let intersection = displayBounds.intersection(windowFrame)
+            guard !intersection.isNull, !intersection.isEmpty else { return nil }
+            return (screen, intersection.width * intersection.height)
+        }
+        return matches.max { $0.1 < $1.1 }?.0
+    }
+
+    private func paddedWindowSize(for visualSize: CGSize) -> CGSize {
+        CGSize(
+            width: visualSize.width + (contentPadding * 2),
+            height: visualSize.height + (contentPadding * 2)
+        )
+    }
+
+    private func applyWindowLayout(on screen: NSScreen? = nil) {
+        guard let window, let screen = screen ?? targetScreen() else { return }
+
+        let windowSize = paddedWindowSize(for: currentVisualSize)
+        let visibleFrame = screen.visibleFrame
+        let frame = NSRect(
+            x: round(visibleFrame.midX - (windowSize.width / 2)),
+            y: round(visibleFrame.minY + bottomPadding - contentPadding),
+            width: windowSize.width,
+            height: windowSize.height
+        )
+
+        // Resize synchronously before SwiftUI swaps state-specific content.
+        // This prevents a larger processing view from being drawn into stale bounds.
+        window.setFrame(frame, display: true)
+    }
+
+    private func observeWindowEnvironment() {
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.repositionVisibleHUD() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.repositionVisibleHUD() }
+            .store(in: &cancellables)
+
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.repositionVisibleHUD() }
+            .store(in: &cancellables)
+
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.repositionVisibleHUD() }
+            .store(in: &cancellables)
+    }
+
+    private func repositionVisibleHUD() {
+        guard window?.isVisible == true else { return }
+        applyWindowLayout()
+        window?.orderFrontRegardless()
     }
 
     private func observeTTSState() {
@@ -252,6 +404,16 @@ class FloatingHUDController: NSObject, ObservableObject {
     private func handleDictationState(_ dictationState: DictationService.State) {
         switch dictationState {
         case .idle:
+            // Dictation terminal states temporarily own the HUD. When their
+            // timers return to idle while read-aloud is still active, restore
+            // the TTS presentation instead of leaving a stale Done/Error/Undo
+            // pill that `hide()` correctly refuses to dismiss during speech.
+            if isTTSActive {
+                let tts = InstantTTSService.shared
+                updateState(isLoading: tts.isLoading, isSpeaking: tts.isSpeaking, error: tts.error)
+                warningMessage = ""
+                return
+            }
             // Only hide if we were showing dictation states
             if case .recording = state { hide() }
             else if case .recordingHandsFree = state { hide() }
@@ -268,76 +430,64 @@ class FloatingHUDController: NSObject, ObservableObject {
 
         case .recording:
             state = .recording
-            setInteractive(true)
             updateWindowSizeForDictation()
             show()
 
         case .recordingHandsFree:
             state = .recordingHandsFree
-            setInteractive(true)
             updateWindowSizeForDictation()
             show()
 
         case .recordingCommand:
             state = .recordingCommand
-            setInteractive(true)
             updateWindowSizeForDictation()
             show()
 
         case .recordingWarning(let message):
             warningMessage = message
             state = .recordingWarning(message: message)
-            setInteractive(true)
             updateWindowSizeForWarning()
             show()
 
         case .transcribing:
             state = .transcribing
-            setInteractive(true)
             updateWindowSizeForTranscribingSphere()
             show()
 
         case .transcribingHandsFree:
             state = .transcribingHandsFree
-            setInteractive(true)
             updateWindowSizeForTranscribingSphere()
             show()
 
         case .transcribingCommand:
             state = .transcribingCommand
-            setInteractive(true)
             updateWindowSizeForTranscribingSphere()
             show()
 
         case .transcribingSlow:
             state = .transcribingSlow
-            setInteractive(true)
             updateWindowSizeForSlowWarning()
             show()
 
         case .done:
             state = .dictationDone
-            setInteractive(false)
             updateWindowSize(expanded: false)
             show()
             scheduleHide(after: 0.3)
 
         case .cancelled:
             state = .cancelled
-            setInteractive(true)
             updateWindowSizeForCancelled()
             show()
 
         case .cancelledWhileTranscribing:
             state = .cancelledWhileTranscribing
-            setInteractive(true)
             updateWindowSizeForCancelled()
             show()
 
         case .error(let message):
             warningMessage = message
             state = .error
-            setInteractive(true)
             updateWindowSizeForWarning()
             show()
             scheduleHide(after: 4)
@@ -345,141 +495,43 @@ class FloatingHUDController: NSObject, ObservableObject {
     }
 
     private func updateWindowSizeForCancelled() {
-        guard let window = window, let hostingView = hostingView else { return }
-
-        guard let screen = NSScreen.main else { return }
-        let visibleFrame = screen.visibleFrame
-        let newX = visibleFrame.midX - (cancelledWidth / 2)
-        let newY = visibleFrame.minY + bottomPadding
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.15
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(
-                NSRect(x: newX, y: newY, width: cancelledWidth, height: cancelledHeight),
-                display: true
-            )
-        }
-
-        hostingView.frame.size = CGSize(width: cancelledWidth, height: cancelledHeight)
+        currentVisualSize = CGSize(width: cancelledWidth, height: cancelledHeight)
     }
 
     private func updateWindowSizeForWarning() {
-        guard let window = window, let hostingView = hostingView else { return }
-
-        guard let screen = NSScreen.main else { return }
-        let visibleFrame = screen.visibleFrame
-        let newX = visibleFrame.midX - (warningWidth / 2)
-        let newY = visibleFrame.minY + bottomPadding
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(
-                NSRect(x: newX, y: newY, width: warningWidth, height: warningHeight),
-                display: true
-            )
-        }
-
-        hostingView.frame.size = CGSize(width: warningWidth, height: warningHeight)
+        currentVisualSize = CGSize(width: warningWidth, height: warningHeight)
     }
 
     private func updateWindowSizeForDictation() {
-        guard let window = window, let hostingView = hostingView else { return }
-
         // If TTS is also active, use combined width
         let useWidth = isTTSActive ? combinedWidth : dictationWidth
-
-        guard let screen = NSScreen.main else { return }
-        let visibleFrame = screen.visibleFrame
-        let newX = visibleFrame.midX - (useWidth / 2)
-        let newY = visibleFrame.minY + bottomPadding
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(
-                NSRect(x: newX, y: newY, width: useWidth, height: dictationWindowHeight),
-                display: true
-            )
-        }
-
-        hostingView.frame.size = CGSize(width: useWidth, height: dictationWindowHeight)
+        currentVisualSize = CGSize(width: useWidth, height: dictationWindowHeight)
     }
 
     private func updateWindowSizeForTTSPlayer() {
-        guard let window = window, let hostingView = hostingView else { return }
-
         // If dictation is also active, use combined dimensions
         let useWidth = isDictationActive ? combinedWidth : ttsPlayerWidth
         let useHeight = isDictationActive ? combinedHeight : ttsPlayerHeight
-
-        guard let screen = NSScreen.main else { return }
-        let visibleFrame = screen.visibleFrame
-        let newX = visibleFrame.midX - (useWidth / 2)
-        let newY = visibleFrame.minY + bottomPadding
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(
-                NSRect(x: newX, y: newY, width: useWidth, height: useHeight),
-                display: true
-            )
-        }
-
-        hostingView.frame.size = CGSize(width: useWidth, height: useHeight)
+        currentVisualSize = CGSize(width: useWidth, height: useHeight)
     }
 
     private func updateWindowSizeForTranscribingSphere() {
-        guard let window = window, let hostingView = hostingView else { return }
-
-        guard let screen = NSScreen.main else { return }
-        let visibleFrame = screen.visibleFrame
-        let newX = visibleFrame.midX - (transcribingSphereSize / 2)
-        let newY = visibleFrame.minY + bottomPadding
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(
-                NSRect(x: newX, y: newY, width: transcribingSphereSize, height: transcribingSphereSize),
-                display: true
-            )
-        }
-
-        hostingView.frame.size = CGSize(width: transcribingSphereSize, height: transcribingSphereSize)
+        currentVisualSize = CGSize(width: transcribingSphereSize, height: transcribingSphereSize)
     }
 
     private func updateWindowSizeForSlowWarning() {
-        guard let window = window, let hostingView = hostingView else { return }
-
         let slowWidth: CGFloat = 280
-        guard let screen = NSScreen.main else { return }
-        let visibleFrame = screen.visibleFrame
-        let newX = visibleFrame.midX - (slowWidth / 2)
-        let newY = visibleFrame.minY + bottomPadding
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(
-                NSRect(x: newX, y: newY, width: slowWidth, height: warningHeight),
-                display: true
-            )
-        }
-
-        hostingView.frame.size = CGSize(width: slowWidth, height: warningHeight)
+        currentVisualSize = CGSize(width: slowWidth, height: warningHeight)
     }
 
     private func updateState(isLoading: Bool, isSpeaking: Bool, error: Error?) {
         cancelHideTimer()
+        defer { updateWindowInteractivity() }
 
         print("[HUD] updateState - isLoading: \(isLoading), isSpeaking: \(isSpeaking), error: \(error != nil), dictationActive: \(isDictationActive)")
 
         if error != nil {
             state = .error
-            setInteractive(false)
             updateWindowSize(expanded: false)
             show()
             scheduleHide(after: 2)
@@ -494,7 +546,6 @@ class FloatingHUDController: NSObject, ObservableObject {
             if !isDictationActive {
                 state = .playing
             }
-            setInteractive(true) // Enable clicks for player controls
             updateWindowSizeForTTSPlayer()
             show()
             // DON'T auto-hide when playing - user needs controls
@@ -502,7 +553,6 @@ class FloatingHUDController: NSObject, ObservableObject {
         } else {
             // Only hide if dictation is not active
             if !isDictationActive {
-                setInteractive(false)
                 updateWindowSize(expanded: false)
                 hide()
             }
@@ -513,16 +563,57 @@ class FloatingHUDController: NSObject, ObservableObject {
         window?.ignoresMouseEvents = !interactive
     }
 
+    private func updateWindowInteractivity() {
+        // A concurrent TTS + dictation presentation renders player controls.
+        // A standalone processing orb does not, so it remains click-through
+        // instead of stealing clicks from the app beneath it.
+        if isTTSActive && isDictationActive {
+            setInteractive(true)
+            return
+        }
+
+        switch state {
+        case .generating, .playing,
+             .recording, .recordingHandsFree, .recordingCommand, .recordingWarning,
+             .transcribingSlow, .error, .cancelled, .cancelledWhileTranscribing:
+            setInteractive(true)
+        case .hidden, .transcribing, .transcribingHandsFree, .transcribingCommand,
+             .dictationDone:
+            setInteractive(false)
+        }
+    }
+
+    private func cancelPendingWindowAnimations() {
+        guard let window else { return }
+
+        // A direct assignment supersedes an in-flight animator-proxy change.
+        // The presentation token separately protects against an already
+        // enqueued completion handler from that old animation.
+        window.contentView?.layer?.removeAllAnimations()
+        window.contentView?.superview?.layer?.removeAllAnimations()
+        window.alphaValue = 1
+    }
+
     func show() {
-        // Cancel any pending hide animation
+        // Every presentation invalidates callbacks belonging to the one before
+        // it, including a timer that has already fired but not yet reached the
+        // main actor.
+        presentationGuard.beginPresentation()
+        cancelHideTimer()
+        cancelPendingWindowAnimations()
         isHideAnimating = false
 
+        // A hotkey can be invoked on a different display or Space between uses.
+        applyWindowLayout()
+        updateWindowInteractivity()
+
         // Force window visible immediately (handles race conditions)
-        window?.alphaValue = 1
         window?.orderFrontRegardless()
     }
 
     func hide() {
+        cancelHideTimer()
+
         // Don't hide if we're in a TTS active state - the player should stay visible
         if isTTSActive {
             print("[HUD] Blocking hide - TTS is active")
@@ -530,8 +621,11 @@ class FloatingHUDController: NSObject, ObservableObject {
         }
 
         guard window?.isVisible == true, window?.alphaValue ?? 0 > 0 else { return }
+        guard !isHideAnimating else { return }
 
+        let presentationToken = presentationGuard.currentToken
         isHideAnimating = true
+        setInteractive(false)
 
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.2
@@ -539,6 +633,7 @@ class FloatingHUDController: NSObject, ObservableObject {
         }, completionHandler: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                guard self.presentationGuard.isCurrent(presentationToken) else { return }
 
                 // If TTS became active during animation, restore visibility
                 if self.isTTSActive {
@@ -561,7 +656,6 @@ class FloatingHUDController: NSObject, ObservableObject {
     func showGenerating(message: String) {
         generatingMessage = message
         state = .generating(message: message)
-        setInteractive(true)  // Allow cancel
         updateWindowSizeForGenerating()
         show()
     }
@@ -582,32 +676,20 @@ class FloatingHUDController: NSObject, ObservableObject {
     }
 
     private func updateWindowSizeForGenerating() {
-        guard let window = window, let hostingView = hostingView else { return }
-
         let genWidth: CGFloat = 200
         let genHeight: CGFloat = 40
-
-        guard let screen = NSScreen.main else { return }
-        let visibleFrame = screen.visibleFrame
-        let newX = visibleFrame.midX - (genWidth / 2)
-        let newY = visibleFrame.minY + bottomPadding
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(
-                NSRect(x: newX, y: newY, width: genWidth, height: genHeight),
-                display: true
-            )
-        }
-
-        hostingView.frame.size = CGSize(width: genWidth, height: genHeight)
+        currentVisualSize = CGSize(width: genWidth, height: genHeight)
     }
 
     private func scheduleHide(after seconds: TimeInterval) {
+        cancelHideTimer()
+        let presentationToken = presentationGuard.currentToken
+
         hideTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
+                guard self.presentationGuard.isCurrent(presentationToken) else { return }
+                self.hideTimer = nil
                 // Don't hide while generating or playing
                 if case .generating = self.state { return }
                 if self.state == .playing { return }
@@ -664,7 +746,6 @@ struct PillIndicatorView: View {
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: controller.state)
         .onHover { hovering in
             isHovering = hovering
             controller.setHovering(hovering)
@@ -847,12 +928,11 @@ struct PillIndicatorView: View {
         DictationRecordingContentView(mode: mode)
     }
 
-    // MARK: - Transcribing Sphere (perfect circle with spinner)
+    // MARK: - Transcribing Sphere
 
     private var transcribingSpherePill: some View {
-        ProgressView()
-            .scaleEffect(0.7)
-            .frame(width: 32, height: 32)
+        ThinkingOrbView(size: 30)
+            .frame(width: 44, height: 44)
             .background(
                 Circle()
                     .fill(.ultraThinMaterial)
@@ -963,6 +1043,10 @@ struct PillIndicatorView: View {
         return msg.contains("permission") || msg.contains("microphone") || msg.contains("accessibility")
     }
 
+    private var isCleanupWarning: Bool {
+        controller.warningMessage.lowercased().contains("cleanup")
+    }
+
     private var errorPill: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
@@ -970,7 +1054,11 @@ struct PillIndicatorView: View {
                     .font(.system(size: 12))
                     .foregroundColor(isPermissionError ? .orange : .secondary)
 
-                Text(isPermissionError ? "Permission needed" : "Something went wrong")
+                Text(
+                    isPermissionError
+                        ? "Permission needed"
+                        : (isCleanupWarning ? "Cleanup skipped" : "Something went wrong")
+                )
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.primary)
 

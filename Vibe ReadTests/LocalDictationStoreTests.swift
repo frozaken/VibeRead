@@ -170,6 +170,93 @@ struct LocalDictationStoreTests {
         #expect(store.items.first { $0.polishedText == "synthetic-recent-polished" }?.audioFilePath == "recent.m4a")
     }
 
+    @Test @MainActor func legacyMigrationDeletesOnlyKnownOwnedAbsoluteAudioSources() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+
+        fixture.defaults.set(DictationStore.AudioRetention.never.rawValue,
+                             forKey: DictationStore.audioRetentionDefaultsKey)
+        let ownedDirectory = fixture.root
+            .appendingPathComponent("Vibe Read/Dictations", isDirectory: true)
+        let unrelatedDirectory = fixture.root
+            .appendingPathComponent("Unrelated", isDirectory: true)
+        try FileManager.default.createDirectory(at: ownedDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: unrelatedDirectory, withIntermediateDirectories: true)
+        let ownedSource = ownedDirectory.appendingPathComponent("owned.m4a")
+        let unrelatedSource = unrelatedDirectory.appendingPathComponent("leave-alone.m4a")
+        try Data([0x01]).write(to: ownedSource)
+        try Data([0x02]).write(to: unrelatedSource)
+
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let records = [
+            LegacyItem(
+                id: UUID(),
+                rawTranscript: "owned",
+                polishedText: "owned",
+                createdAt: now,
+                audioFilePath: ownedSource.path,
+                durationMs: 10,
+                serverId: nil
+            ),
+            LegacyItem(
+                id: UUID(),
+                rawTranscript: "unrelated",
+                polishedText: "unrelated",
+                createdAt: now,
+                audioFilePath: unrelatedSource.path,
+                durationMs: 20,
+                serverId: nil
+            )
+        ]
+        fixture.defaults.set(
+            try JSONEncoder().encode(records),
+            forKey: "dictation_history_v1_absolute_paths"
+        )
+
+        let store = DictationStore(
+            applicationSupportDirectory: fixture.root,
+            defaults: fixture.defaults,
+            now: { now }
+        )
+
+        #expect(store.items.count == 2)
+        #expect(!FileManager.default.fileExists(atPath: ownedSource.path))
+        #expect(FileManager.default.fileExists(atPath: unrelatedSource.path))
+        for item in store.items {
+            let relativePath = try #require(item.audioFilePath)
+            let migratedURL = try #require(
+                store.userDictationsDirectory?.appendingPathComponent(relativePath)
+            )
+            #expect(FileManager.default.fileExists(atPath: migratedURL.path))
+        }
+    }
+
+    @Test @MainActor func neverRetentionStillExpiresUntrackedCrashOrphans() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+
+        fixture.defaults.set(DictationStore.AudioRetention.never.rawValue,
+                             forKey: DictationStore.audioRetentionDefaultsKey)
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let audioDirectory = fixture.root
+            .appendingPathComponent("VibeRead/Dictations", isDirectory: true)
+        try FileManager.default.createDirectory(at: audioDirectory, withIntermediateDirectories: true)
+        let orphanURL = audioDirectory.appendingPathComponent("orphan.m4a")
+        try Data([0x03]).write(to: orphanURL)
+        try FileManager.default.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-8 * 24 * 60 * 60)],
+            ofItemAtPath: orphanURL.path
+        )
+
+        _ = DictationStore(
+            applicationSupportDirectory: fixture.root,
+            defaults: fixture.defaults,
+            now: { now }
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: orphanURL.path))
+    }
+
     @Test @MainActor func addingADictationEnforcesRetentionDuringLongRunningSessions() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -233,7 +320,7 @@ struct LocalDictationStoreTests {
         #expect(!FileManager.default.fileExists(atPath: audioURL.path))
     }
 
-    @Test @MainActor func failedAudioKeepsRetryWindowWithImmediateSuccessCleanup() throws {
+    @Test @MainActor func immediateRetentionAlsoRemovesFailedAudio() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
 
@@ -251,8 +338,8 @@ struct LocalDictationStoreTests {
         store.addFailed(audioURL: audioURL, durationMs: 25)
 
         #expect(store.items.count == 1)
-        #expect(store.items.first?.audioFilePath == "retry-me.m4a")
-        #expect(FileManager.default.fileExists(atPath: audioURL.path))
+        #expect(store.items.first?.audioFilePath == nil)
+        #expect(!FileManager.default.fileExists(atPath: audioURL.path))
     }
 
     @Test @MainActor func deleteAllAudioPreservesTranscriptRows() throws {

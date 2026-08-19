@@ -148,8 +148,8 @@ export default function Home() {
                 Local by default.
               </h2>
               <p className="text-xl text-[#FFFFEB]/70">
-                Your recent dictations stay useful without becoming somebody
-                else&apos;s database.
+                History stays on your Mac. Processing goes only to the
+                providers you choose.
               </p>
             </div>
 
@@ -164,11 +164,12 @@ export default function Home() {
                   </span>
                 </div>
                 <h3 className="mb-6 font-display text-4xl leading-[1.1] md:text-5xl">
-                  Keep the words,<br />not the cloud.
+                  Keep history<br />on your Mac.
                 </h3>
                 <p className="mb-10 text-lg leading-relaxed text-[#FFFFEB]/70">
                   Recent dictations stay in local history so you can copy or
-                  retry them. Nothing is written to a Vibe Read database.
+                  retry them. Nothing is written to a Vibe Read cloud database.
+                  Your chosen provider still receives content for processing.
                 </p>
 
                 <div className="mt-auto rounded-3xl border border-white/10 bg-[#1A1A1A] p-6">
@@ -216,11 +217,12 @@ export default function Home() {
                 <p className="mb-8 text-lg leading-relaxed text-[#FFFFEB]/70">
                   Retry files are removed after seven days by default. Change
                   the retention period or clear everything whenever you want.
+                  Immediate cleanup also removes failed recordings.
                 </p>
                 <ul className="mb-10 space-y-4 text-[#FFFFEB]/80">
                   {[
                     "Seven days by default",
-                    "Transcripts stay local",
+                    "Immediate means immediate",
                     "Clear anytime in settings",
                   ].map((text) => (
                     <li className="flex items-center gap-3" key={text}>

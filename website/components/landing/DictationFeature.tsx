@@ -16,21 +16,22 @@ export function DictationFeature({ theme = "dark" }: DictationFeatureProps) {
   return (
     <div className="flex scroll-mt-24 flex-col items-center gap-16 md:flex-row" id="dictation">
       <div className="flex-1">
-        <Badge className="mb-6 bg-[#E0CCFA] text-black hover:bg-[#E0CCFA]/90">Local dictation</Badge>
+        <Badge className="mb-6 bg-[#E0CCFA] text-black hover:bg-[#E0CCFA]/90">Local history</Badge>
         <h2 className={cn("text-4xl md:text-7xl font-display mb-8 leading-[1.1]", isLight ? "text-slate-900" : "text-[#FFFFEB]")}>
           Don't type,<br />just speak.
         </h2>
         <p className={cn("text-xl leading-relaxed mb-6 max-w-lg", isLight ? "text-slate-600" : "text-[#FFFFEB]/70")}>
-          Hold the shortcut, speak naturally, and drop clean text into the app
+          Hold the shortcut, speak naturally, and drop the transcript into the app
           you are already using.
         </p>
         <p className={cn("text-lg leading-relaxed mb-10 max-w-lg", isLight ? "text-slate-500" : "text-[#FFFFEB]/60")}>
-          Vibe Read talks directly to the OpenAI compatible provider you choose.
-          There is no Vibe Read account or database in the middle.
+          Choose ElevenLabs, Groq, OpenRouter, OpenAI, or a custom compatible
+          endpoint, then choose the model and language. Audio goes directly to
+          that provider. There is no Vibe Read server in the middle.
         </p>
         <ul className={cn("space-y-4 mb-10", isLight ? "text-slate-700" : "text-[#FFFFEB]/80")}>
             <li className="flex items-center gap-3">
-                <Check className="w-5 h-5 text-[#E0CCFA]" /> Works in any Mac app
+                <Check className="w-5 h-5 text-[#E0CCFA]" /> Works across Mac apps
             </li>
             <li className="flex items-center gap-3">
                 <Check className="w-5 h-5 text-[#E0CCFA]" /> Local history you control

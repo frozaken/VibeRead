@@ -23,8 +23,9 @@ export function ContextAwareContent({ theme = "dark", compact = false }: Context
         <p className={cn("leading-relaxed mb-10 max-w-lg",
             compact ? "text-lg" : "text-xl",
             isLight ? "text-slate-600" : "text-[#FFFFEB]/70")}>
-          Add your own key for any OpenAI compatible provider. You can also
-          point Vibe Read at a compatible service running on your Mac.
+          Choose ElevenLabs, Groq, OpenRouter, OpenAI, or a compatible custom
+          endpoint for dictation. Pick the model and language, then configure
+          Cmd + E separately if you want it.
         </p>
         <div className={cn("p-4 rounded-2xl border max-w-md mb-8", isLight ? "bg-slate-50 border-slate-200" : "bg-white/5 border-white/10")}>
             <div className="flex items-center gap-3 mb-2">
@@ -60,15 +61,15 @@ export function ContextAwareVisual() {
                     <div className="flex items-center gap-3 rounded-lg border border-white/5 bg-white/5 p-4">
                         <KeyRound className="h-5 w-5 text-[#E0CCFA]" />
                         <div>
-                            <p className="text-sm text-[#FFFFEB]">Your API key</p>
-                            <p className="text-xs text-[#FFFFEB]/45">Saved in Keychain</p>
+                            <p className="text-sm text-[#FFFFEB]">Keys stay in Keychain</p>
+                            <p className="text-xs text-[#FFFFEB]/45">Read only when you verify or use one</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-3 rounded-lg border border-white/5 bg-white/5 p-4">
                         <Server className="h-5 w-5 text-[#E0CCFA]" />
                         <div>
-                            <p className="text-sm text-[#FFFFEB]">Your base URL</p>
-                            <p className="text-xs text-[#FFFFEB]/45">Direct to your provider</p>
+                            <p className="text-sm text-[#FFFFEB]">Dictation and Cmd + E</p>
+                            <p className="text-xs text-[#FFFFEB]/45">Configured separately</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-3 rounded-lg border border-[#E0CCFA]/20 bg-[#E0CCFA]/10 p-4">

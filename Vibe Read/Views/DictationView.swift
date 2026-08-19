@@ -247,6 +247,7 @@ struct DictationLoadMoreView: View {
 struct DictationHistoryRow: View {
     let item: DictationHistoryItem
     let isHovered: Bool
+    @ObservedObject private var store = DictationStore.shared
     @State private var showCopiedFeedback = false
 
     var body: some View {
@@ -264,7 +265,7 @@ struct DictationHistoryRow: View {
                 if item.polishedText.isEmpty {
                     Text(item.audioFileURL == nil
                          ? "Transcription unavailable"
-                         : "Transcription failed — recording kept for retry")
+                         : "Transcription failed. Recording kept for retry")
                         .font(.system(size: 14))
                         .foregroundColor(.secondary)
                 } else {
@@ -277,6 +278,13 @@ struct DictationHistoryRow: View {
                 Text(formatRelativeTime(item.createdAt))
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
+
+                if let error = store.retryErrors[item.id] {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Spacer(minLength: 8)
@@ -284,13 +292,22 @@ struct DictationHistoryRow: View {
             // Fixed-width action buttons column (always reserves space)
             HStack(spacing: 8) {
                 if item.polishedText.isEmpty, item.audioFileURL != nil {
-                    Button(action: retryTranscription) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 12))
-                            .foregroundColor(.accentColor)
+                    if store.retryingIDs.contains(item.id) {
+                        Button(action: cancelRetry) {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Cancel retry")
+                    } else {
+                        Button(action: retryTranscription) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 12))
+                                .foregroundColor(.accentColor)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Retry transcription")
                     }
-                    .buttonStyle(.plain)
-                    .help("Retry transcription")
                 }
 
                 Button(action: copyToClipboard) {
@@ -304,6 +321,13 @@ struct DictationHistoryRow: View {
 
                 // Folder menu
                 Menu {
+                    if item.rawTranscript != item.polishedText,
+                       !item.rawTranscript.isEmpty {
+                        Button(action: copyOriginalTranscript) {
+                            Label("Copy Provider Transcript", systemImage: "doc.on.doc")
+                        }
+                        Divider()
+                    }
                     if item.audioFileURL != nil {
                         Button(action: showInFinder) {
                             Label("Show in Finder", systemImage: "folder")
@@ -362,7 +386,17 @@ struct DictationHistoryRow: View {
     }
 
     private func retryTranscription() {
-        DictationStore.shared.retryTranscription(item)
+        store.retryTranscription(item)
+    }
+
+    private func cancelRetry() {
+        store.cancelRetry(item)
+    }
+
+    private func copyOriginalTranscript() {
+        guard !item.rawTranscript.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(item.rawTranscript, forType: .string)
     }
 
     private func showInFinder() {

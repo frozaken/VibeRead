@@ -46,7 +46,7 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://viberead.ai"),
   title: "Vibe Read | Open source voice dictation for Mac",
   description:
-    "A free, open source Mac app for dictation, macOS read aloud, and configurable Cmd + E actions. Local history. Your API key. No account.",
+    "A free, open source Mac app for dictation, macOS read aloud, and configurable Cmd + E actions. Local history. Direct provider connections. No Vibe Read account.",
   applicationName: "Vibe Read",
   category: "productivity",
   keywords: [

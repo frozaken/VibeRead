@@ -5,6 +5,7 @@ struct OverlayMenuView: View {
     @ObservedObject var controller: UniversalOverlayController
     @ObservedObject private var actionService = UniversalActionService.shared
     @ObservedObject private var actionStore = LocalTextActionStore.shared
+    @ObservedObject private var accessibility = AccessibilityService.shared
     @State private var selectedIndex = 0
     @State private var hoveringIndex: Int?
 
@@ -13,42 +14,25 @@ struct OverlayMenuView: View {
             header
             Divider().padding(.horizontal, 12)
 
-            VStack(spacing: 2) {
-                ForEach(Array(menuItems.enumerated()), id: \.element.id) { index, item in
-                    MenuItemRow(
-                        item: item,
-                        isSelected: selectedIndex == index,
-                        isHovering: hoveringIndex == index
-                    )
-                    .onTapGesture { execute(item) }
-                    .onHover { hovering in
-                        hoveringIndex = hovering ? index : nil
-                        if hovering { selectedIndex = index }
-                        controller.resetDismissTimer()
-                    }
-                }
+            if !accessibility.hasAccessibilityPermission {
+                accessibilityBanner
+                Divider().padding(.horizontal, 12)
             }
-            .padding(.vertical, 6)
 
-            if actionService.isProcessing {
-                Divider().padding(.horizontal, 12)
-                HStack(spacing: 8) {
-                    ProgressView().scaleEffect(0.7)
-                    Text("Running with your provider…")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+            Group {
+                if actionService.isProcessing {
+                    processingView
+                } else if actionService.lastOutput != nil {
+                    resultView
+                } else {
+                    actionList
                 }
-                .padding(8)
-            } else if let error = actionService.lastError {
-                Divider().padding(.horizontal, 12)
-                Text(error.localizedDescription)
-                    .font(.caption)
-                    .foregroundColor(.red)
-                    .lineLimit(2)
-                    .padding(8)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 300)
+        // The controller sizes the nonactivating panel only when it opens.
+        // A stable canvas prevents async progress and output from being clipped.
+        .frame(width: 280, height: 400)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(.ultraThinMaterial)
@@ -63,11 +47,177 @@ struct OverlayMenuView: View {
             onUp: { move(by: -1) },
             onDown: { move(by: 1) },
             onEnter: {
-                if menuItems.indices.contains(selectedIndex) {
-                    execute(menuItems[selectedIndex])
-                }
+                guard !actionService.isProcessing,
+                      actionService.lastOutput == nil,
+                      menuItems.indices.contains(selectedIndex) else { return }
+                execute(menuItems[selectedIndex])
             }
         ))
+        .task(id: actionService.isProcessing) {
+            guard actionService.isProcessing else { return }
+            while !Task.isCancelled && actionService.isProcessing {
+                controller.resetDismissTimer()
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+            }
+        }
+        .onReceive(actionService.$lastOutput) { output in
+            if output != nil { controller.resetDismissTimer() }
+        }
+        .onChange(of: controller.isVisible) { isVisible in
+            if !isVisible && actionService.isProcessing {
+                actionService.cancel()
+            }
+        }
+    }
+
+    private var actionList: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(Array(menuItems.enumerated()), id: \.element.id) { index, item in
+                        MenuItemRow(
+                            item: item,
+                            isSelected: selectedIndex == index,
+                            isHovering: hoveringIndex == index
+                        )
+                        .onTapGesture { execute(item) }
+                        .onHover { hovering in
+                            hoveringIndex = hovering ? index : nil
+                            if hovering { selectedIndex = index }
+                            controller.resetDismissTimer()
+                        }
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+
+            if let error = actionService.lastError {
+                Divider().padding(.horizontal, 12)
+                errorText(error)
+                    .padding(10)
+            }
+        }
+    }
+
+    private var processingView: some View {
+        VStack(spacing: 18) {
+            Spacer(minLength: 8)
+            ThinkingOrbView(size: 58)
+                .accessibilityLabel("Running text action")
+            Text("Running with your provider")
+                .font(.system(size: 13, weight: .medium))
+            Text("The result will stay here for review.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Button("Cancel") {
+                actionService.cancel()
+            }
+            .keyboardShortcut(.cancelAction)
+            Spacer(minLength: 8)
+        }
+        .padding(16)
+    }
+
+    private var resultView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Preview", systemImage: "text.page")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button("Discard") {
+                    actionService.clearResult()
+                }
+                .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+
+            ScrollView {
+                Text(actionService.lastOutput ?? "")
+                    .font(.system(size: 12))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.primary.opacity(0.055))
+            )
+
+            if let error = actionService.lastError {
+                errorText(error)
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    _ = actionService.copyLastOutput()
+                    controller.resetDismissTimer()
+                } label: {
+                    Label(
+                        actionService.didCopyOutput ? "Copied" : "Copy",
+                        systemImage: actionService.didCopyOutput ? "checkmark" : "doc.on.doc"
+                    )
+                }
+
+                Spacer()
+
+                Button {
+                    if actionService.applyLastOutput() {
+                        controller.hide()
+                    } else {
+                        controller.resetDismissTimer()
+                    }
+                } label: {
+                    Label("Apply", systemImage: "arrow.turn.down.left")
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .controlSize(.small)
+        }
+        .padding(12)
+    }
+
+    private var accessibilityBanner: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "accessibility")
+                    .foregroundColor(.orange)
+                Text("Selection, fn shortcuts, and Apply need Accessibility access. Cmd+E and clipboard actions still work.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 10) {
+                Button("Grant Access") {
+                    accessibility.requestAccessibilityPermission()
+                }
+                Button("Open Settings") {
+                    accessibility.openAccessibilitySettings()
+                }
+                Spacer()
+                Button {
+                    accessibility.refreshAllPermissions()
+                } label: {
+                    Image(systemName: accessibility.isPollingForPermission
+                        ? "hourglass"
+                        : "arrow.clockwise")
+                }
+                .help("Check permission again")
+                .accessibilityLabel("Check Accessibility permission again")
+            }
+            .buttonStyle(.plain)
+            .font(.caption2)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+    }
+
+    private func errorText(_ error: Error) -> some View {
+        Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+            .font(.caption2)
+            .foregroundColor(.red)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var sourceText: String? {
@@ -83,23 +233,35 @@ struct OverlayMenuView: View {
         return nil
     }
 
+    private var sourceLabel: String {
+        switch controller.currentContext?.contextType {
+        case .textSelection: return "Selected text"
+        case .clipboard: return "Copied clipboard text"
+        default: return "Vibe Read actions"
+        }
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Image(systemName: sourceText == nil ? "command" : "text.cursor")
                     .foregroundColor(.secondary)
-                Text(sourceText == nil ? "Vibe Read actions" : "Selected text")
+                Text(sourceLabel)
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
                 Text(actionPaletteShortcut)
                     .font(.caption2)
                     .foregroundColor(.secondary)
-                Button(action: controller.hide) {
+                Button {
+                    actionService.cancel()
+                    controller.hide()
+                } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .medium))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Close action palette")
             }
 
             if let text = sourceText {
@@ -151,7 +313,8 @@ struct OverlayMenuView: View {
                         id: action.id.uuidString,
                         icon: "wand.and.stars",
                         title: action.name,
-                        action: { Task { await actionService.run(action, on: text) } }
+                        keepsOpen: true,
+                        action: { actionService.run(action, on: text) }
                     ))
                 }
             }
@@ -159,7 +322,9 @@ struct OverlayMenuView: View {
             items.append(MenuItem(
                 id: "hint",
                 icon: "info.circle",
-                title: "Select text, then open this palette",
+                title: accessibility.hasAccessibilityPermission
+                    ? "Select text, then open this palette"
+                    : "Grant access to use selected text",
                 isDisabled: true,
                 action: {}
             ))
@@ -177,13 +342,23 @@ struct OverlayMenuView: View {
     }
 
     private func execute(_ item: MenuItem) {
-        guard !item.isSeparator && !item.isDisabled else { return }
-        controller.hide()
-        item.action()
+        guard !actionService.isProcessing,
+              !item.isSeparator,
+              !item.isDisabled else { return }
+        if item.keepsOpen {
+            item.action()
+            controller.resetDismissTimer()
+        } else {
+            controller.hide()
+            item.action()
+        }
     }
 
     private func move(by delta: Int) {
-        let valid = menuItems.enumerated().filter { !$0.element.isSeparator && !$0.element.isDisabled }
+        guard !actionService.isProcessing, actionService.lastOutput == nil else { return }
+        let valid = menuItems.enumerated().filter {
+            !$0.element.isSeparator && !$0.element.isDisabled
+        }
         guard !valid.isEmpty else { return }
         let current = valid.firstIndex(where: { $0.offset == selectedIndex }) ?? 0
         selectedIndex = valid[(current + delta + valid.count) % valid.count].offset
@@ -251,6 +426,7 @@ struct MenuItem: Identifiable {
     var shortcut: String? = nil
     var isDisabled = false
     var isSeparator = false
+    var keepsOpen = false
     let action: () -> Void
 
     static func separator(id: String) -> MenuItem {

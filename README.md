@@ -35,9 +35,11 @@
 - Keeps transcript history in a local SQLite database
 - Retains local audio for retry and removes it after seven days by default
 - Lets every global shortcut be rebound
-- Connects directly to the OpenAI-compatible provider you choose
+- Connects directly to ElevenLabs, Groq, OpenRouter, OpenAI, or a custom compatible endpoint
+- Configures dictation and Cmd + E independently
+- Lets you choose the dictation language, a curated model, or a custom model ID where supported
 
-Vibe Read has no account or operated server in the request path. The source is available under the [MIT License](LICENSE).
+Vibe Read has no account system or operated server in the request path. The source is available under the [MIT License](LICENSE).
 
 ## Quick start
 
@@ -54,27 +56,68 @@ You need macOS 13 Ventura or later and Xcode 16 or later. The project has no thi
 
 3. Select the `Vibe Read` scheme and `My Mac`.
 
-4. Choose a local signing identity if Xcode asks.
+4. Open the app target under Signing & Capabilities.
 
-5. Build and run.
+5. Choose your Personal Team and give your fork a unique bundle identifier such as `com.yourname.VibeRead`.
 
-6. Grant Microphone access for dictation and Accessibility access for global shortcuts, selected text, and pasting.
+6. Keep that team and bundle identifier stable. Changing either one can make macOS ask for permissions again and can create a separate Keychain namespace.
 
-7. Open Settings and configure your AI provider.
+7. Build and run.
 
-Read-aloud works with the voices already on your Mac. Dictation and provider-backed text actions need an OpenAI-compatible endpoint.
+8. Vibe Read does not show system permission prompts at startup. Click Grant
+   Access in Settings or intentionally use a feature that needs access. macOS
+   then requests Microphone access for dictation or Accessibility access for
+   function-key shortcuts, selected text, and pasting.
+
+9. The app opens AI Provider settings on a clean install. Pick a dictation provider and enter your own key. ElevenLabs uses Save Key. The other hosted providers use Save & Verify.
+
+Read-aloud works with the voices already on your Mac. Ordinary global chords such as Cmd + E use a native macOS hotkey and do not require Accessibility permission. Provider-backed Cmd + E actions are optional.
+
+If you hand this repository to Codex or another coding agent, ask it to follow the same steps, build the `Vibe Read` scheme for `My Mac`, and leave provider keys for you to enter in the app. Keys should never be placed in source files or shell history.
 
 ## Configure a provider
 
-Open Settings and choose AI Provider. Add the base URL, API key, transcription model, and text-action model for your provider. An API key is optional for a loopback service that accepts unauthenticated requests.
+Open Settings and choose AI Provider.
 
-Vibe Read uses these OpenAI-compatible routes relative to the base URL.
+Dictation and Cmd + E have separate provider and model choices. A saved Groq,
+OpenRouter, or OpenAI key is reused if both features select that provider.
+ElevenLabs is dictation-only. Custom dictation and custom text actions have
+separate URLs and Keychain entries.
 
-| Method | Route | Used for |
-| --- | --- | --- |
-| `GET` | `/models` | Connection test |
-| `POST` | `/audio/transcriptions` | Dictation audio |
-| `POST` | `/chat/completions` | Configurable text actions |
+Launching Vibe Read and opening Settings do not read Keychain. Vibe Read reads
+a saved provider key only after you explicitly verify it or intentionally use
+a provider-backed feature. A key loaded from Keychain is
+cached in memory until you quit the app, so later requests to that provider in
+the same run do not read it again.
+
+Older builds used one generic provider key. Vibe Read does not automatically
+discover or migrate that key. Re-enter it for the provider you want to use and
+use the save action shown for that provider.
+
+Dictation language can stay on Auto detect or be set explicitly. ElevenLabs uses Scribe v2. Other dictation providers offer presets plus a custom model ID field.
+
+| Provider | Dictation choices | Cmd + E choices | Good fit |
+| --- | --- | --- | --- |
+| ElevenLabs | Scribe v2 | Not used | Setup tested most heavily with Vibe Read |
+| Groq | Whisper Large V3 Turbo or Whisper Large V3 | GPT OSS 120B or 20B | Speed and cost option |
+| OpenRouter | GPT-4o Transcribe or Mini | GPT-5.6 Luna, GPT OSS, or a custom model | One key across many models |
+| OpenAI | GPT Transcribe, Mini, or Whisper 1 | GPT-5.6 Luna or a custom model | Direct OpenAI access |
+| Custom | Any compatible transcription model | Any compatible chat model | Local loopback or another service |
+
+The simplest setup for an existing ElevenLabs user is Scribe v2 for dictation. Cmd + E can stay local-only until you add a separate text provider. Within Groq, Whisper Large V3 Turbo is the faster dictation preset.
+
+For Groq, OpenRouter, OpenAI, and custom providers, Save & Verify checks the credential and endpoint without uploading audio or selected text. When an applicable model list is available, it also checks the selected model ID. ElevenLabs uses Save Key without a network request because its general model catalog is not an authoritative Scribe check. Your first dictation is the end-to-end ElevenLabs test.
+
+Local Cmd + E actions such as Copy and Read aloud do not need a text provider. Provider-backed actions return a preview. Vibe Read applies the result only after you choose Apply and only to the app where the action began.
+
+Vibe Read talks to these provider routes directly.
+
+| Provider | Method | Route | Used for |
+| --- | --- | --- | --- |
+| ElevenLabs | `POST` | `/v1/speech-to-text` | Dictation audio |
+| Groq, OpenRouter, OpenAI, or custom | `GET` | `/models` | Connection and model check |
+| Groq, OpenRouter, OpenAI, or custom | `POST` | `/audio/transcriptions` | Dictation audio |
+| Groq, OpenRouter, OpenAI, or custom | `POST` | `/chat/completions` | Configurable text actions |
 
 Remote providers must use HTTPS. Plain HTTP is accepted only for `localhost`, `127.0.0.1`, or `::1`.
 
@@ -90,7 +133,7 @@ Remote providers must use HTTPS. Plain HTTP is accepted only for `localhost`, `1
 | Read selected text | `Command + Shift + E` |
 | Pause or resume read-aloud | `Command + Shift + Space` |
 
-Change any shortcut under Settings and Shortcuts. Global shortcuts require Accessibility permission and may conflict with shortcuts owned by macOS or another app.
+Change any shortcut under Settings and Shortcuts. Ordinary chords are reserved as native global hotkeys. Function-key shortcuts, selected text, and pasting require Accessibility permission. Settings reports a conflict when macOS or another app already owns a chord.
 
 ## Privacy
 
@@ -100,9 +143,10 @@ Vibe Read stores its own data on your Mac. Provider requests go directly from th
 | --- | --- |
 | Transcript history | Local SQLite until you delete it |
 | Audio kept for retry | Local files removed after seven days by default |
-| API key | macOS Keychain |
+| Provider API keys | macOS Keychain. Groq, OpenRouter, and OpenAI can be shared between features. ElevenLabs is dictation-only. Custom dictation and custom text use separate items. |
 | Dictation audio | Your configured provider when you transcribe |
 | Text used by an action | Your configured provider when you run that action |
+| Transcript cleanup text | Your configured text provider only when a custom cleanup mode is enabled |
 | Read-aloud text | The macOS speech synthesizer |
 
 You can change audio retention or clear local data from Settings. A remote provider handles requests under its own privacy and retention terms. Use a compatible loopback service if you want provider requests to remain on your Mac.
@@ -153,6 +197,7 @@ The tests do not migrate or clean your real dictation history.
 - [Local data](LOCAL_DATA.md)
 - [Privacy](PRIVACY.md)
 - [Security](SECURITY.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [Contributing](CONTRIBUTING.md)
 - [Static website](website/README.md)
 

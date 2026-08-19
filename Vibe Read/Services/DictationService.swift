@@ -61,12 +61,14 @@ class DictationService: ObservableObject {
     private var activeSavedAudioURL: URL?
     private var activeDurationMs: Int?
     private var activeClientID: UUID?
+    private var activePasteTarget: UniversalActionTarget?
 
     // Undo support
     private var pendingCancelURL: URL?  // Audio file pending deletion
     private var pendingCancelSavedURL: URL?
     private var pendingCancelDurationMs: Int?
     private var pendingCancelClientID: UUID?
+    private var pendingCancelPasteTarget: UniversalActionTarget?
     private var undoTimer: Timer?
 
     private init() {}
@@ -170,10 +172,12 @@ class DictationService: ObservableObject {
             let savedURL = pendingCancelSavedURL
             let durationMs = pendingCancelDurationMs
             let clientID = pendingCancelClientID
+            let pasteTarget = pendingCancelPasteTarget
             pendingCancelURL = nil
             pendingCancelSavedURL = nil
             pendingCancelDurationMs = nil
             pendingCancelClientID = nil
+            pendingCancelPasteTarget = nil
 
             // Recording cannot be resumed, but the captured audio can be sent
             // again. Reuse its retained copy so undo does not create an orphan.
@@ -184,7 +188,8 @@ class DictationService: ObservableObject {
                 url: url,
                 durationMs: durationMs,
                 existingSavedURL: savedURL,
-                clientID: clientID
+                clientID: clientID,
+                pasteTarget: pasteTarget
             )
         }
 
@@ -207,6 +212,7 @@ class DictationService: ObservableObject {
         pendingCancelSavedURL = nil
         pendingCancelDurationMs = Int(recordingDuration * 1_000)
         pendingCancelClientID = nil
+        pendingCancelPasteTarget = nil
 
         recordingURL = nil
         recordingDuration = 0
@@ -228,6 +234,7 @@ class DictationService: ObservableObject {
         pendingCancelSavedURL = activeSavedAudioURL
         pendingCancelDurationMs = activeDurationMs
         pendingCancelClientID = activeClientID
+        pendingCancelPasteTarget = activePasteTarget
         clearActiveTranscriptionResources()
         recordingURL = nil
 
@@ -265,6 +272,7 @@ class DictationService: ObservableObject {
         pendingCancelSavedURL = nil
         pendingCancelDurationMs = nil
         pendingCancelClientID = nil
+        pendingCancelPasteTarget = nil
     }
 
     private func startRecording() {
@@ -365,7 +373,8 @@ class DictationService: ObservableObject {
         url: URL,
         durationMs: Int? = nil,
         existingSavedURL: URL? = nil,
-        clientID existingClientID: UUID? = nil
+        clientID existingClientID: UUID? = nil,
+        pasteTarget existingPasteTarget: UniversalActionTarget? = nil
     ) {
         transcriptionTask?.cancel()
         let savedURL = existingSavedURL ?? saveAudioForHistory(tempURL: url)
@@ -376,12 +385,14 @@ class DictationService: ObservableObject {
         let transformPrompt = dictationMode.hasCustomPrompt ? dictationMode.systemPrompt : nil
 
         let clientID = existingClientID ?? UUID()
+        let pasteTarget = existingPasteTarget ?? Self.frontmostApplicationTarget()
         let transcriptionID = UUID()
         activeTranscriptionID = transcriptionID
         activeTempAudioURL = url
         activeSavedAudioURL = savedURL
         activeDurationMs = durationMs
         activeClientID = clientID
+        activePasteTarget = pasteTarget
 
         transcriptionTask = Task { [weak self] in
             guard let self else { return }
@@ -399,7 +410,7 @@ class DictationService: ObservableObject {
                           !Task.isCancelled else { return }
                     self.stopTranscriptionTimer()
                     self.lastResult = result
-                    self.state = .done
+                    var completionWarning = result.warning
                     self.recordingDuration = 0
 
                     DictationStore.shared.add(
@@ -413,7 +424,21 @@ class DictationService: ObservableObject {
                     switch mode {
                     case .normal, .handsFree:
                         if AppSettings.shared.autoPasteAfterDictation {
-                            AccessibilityService.shared.pasteText(result.polishedText)
+                            if let pasteTarget,
+                               UniversalActionService.targetMatches(
+                                   pasteTarget,
+                                   Self.frontmostApplicationTarget()
+                               ) {
+                                if !AccessibilityService.shared.pasteText(
+                                    result.polishedText,
+                                    expectedTarget: pasteTarget
+                                ) {
+                                    completionWarning = "Dictation saved. Grant Accessibility access, then use Paste last dictation."
+                                }
+                            } else {
+                                let applicationName = pasteTarget?.applicationName ?? "the original app"
+                                completionWarning = "Dictation saved. Focus \(applicationName), then use Paste last dictation."
+                            }
                         }
                     case .command:
                         // Voice-driven command mode feeds the local action
@@ -427,12 +452,17 @@ class DictationService: ObservableObject {
                     self.activeTranscriptionID = nil
                     self.clearActiveTranscriptionResources()
 
-                    // Quick transition - just fade out
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                        Task { @MainActor [weak self] in
-                            guard let self else { return }
-                            if case .done = self.state {
-                                self.state = .idle
+                    self.state = completionWarning.map(State.error) ?? .done
+
+                    if completionWarning != nil {
+                        self.scheduleErrorDismissal()
+                    } else {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                            Task { @MainActor [weak self] in
+                                guard let self else { return }
+                                if case .done = self.state {
+                                    self.state = .idle
+                                }
                             }
                         }
                     }
@@ -542,6 +572,54 @@ class DictationService: ObservableObject {
         activeSavedAudioURL = nil
         activeDurationMs = nil
         activeClientID = nil
+        activePasteTarget = nil
+    }
+
+    /// Cancels in-flight private work and removes audio that has not yet been
+    /// committed to local history. Used by explicit history deletion and a
+    /// normal application shutdown so neither path can be undone by a late
+    /// provider response.
+    func discardActiveWork() {
+        stopRecordingTimer()
+        stopTranscriptionTimer()
+        stopUndoTimer()
+
+        activeTranscriptionID = nil
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
+
+        var uncommittedAudio = Set<URL>()
+        [recordingURL, activeTempAudioURL, activeSavedAudioURL,
+         pendingCancelURL, pendingCancelSavedURL].forEach { url in
+            if let url { uncommittedAudio.insert(url) }
+        }
+        if recordingURL != nil, let stoppedURL = recorder.stopRecording() {
+            uncommittedAudio.insert(stoppedURL)
+        }
+        for url in uncommittedAudio {
+            try? FileManager.default.removeItem(at: url)
+        }
+
+        recordingURL = nil
+        clearActiveTranscriptionResources()
+        pendingCancelURL = nil
+        pendingCancelSavedURL = nil
+        pendingCancelDurationMs = nil
+        pendingCancelClientID = nil
+        pendingCancelPasteTarget = nil
+        lastResult = nil
+        recordingDuration = 0
+        undoCountdown = 0
+        state = .idle
+    }
+
+    private static func frontmostApplicationTarget() -> UniversalActionTarget? {
+        guard let application = NSWorkspace.shared.frontmostApplication else { return nil }
+        return UniversalActionTarget(
+            bundleIdentifier: application.bundleIdentifier ?? "",
+            processIdentifier: application.processIdentifier,
+            applicationName: application.localizedName ?? "the original app"
+        )
     }
 
     private func scheduleErrorDismissal() {

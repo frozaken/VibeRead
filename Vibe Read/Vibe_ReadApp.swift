@@ -129,14 +129,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         audioCleanupTimer?.tolerance = 60 * 60
 
-        if !AccessibilityService.shared.checkPermission() {
-            print("[App] Accessibility permission is needed for global shortcuts and pasting")
-        }
+        // Do not trigger a system permission prompt at launch. Settings and
+        // the Cmd+E readiness card explain why access is needed and let the
+        // user request it explicitly.
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard !DictationStore.isRunningTests else { return }
+        AccessibilityService.shared.refreshAllPermissions()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         audioCleanupTimer?.invalidate()
         shortcutService?.stopMonitoring()
+        DictationService.shared.discardActiveWork()
         InstantTTSService.shared.stop()
     }
 
@@ -178,8 +184,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static func readSelection() {
-        let text = AccessibilityService.shared.getSelectedText()
-            ?? NSPasteboard.general.string(forType: .string)
+        let accessibility = AccessibilityService.shared
+        guard accessibility.checkPermission() else {
+            accessibility.requestAccessibilityPermission()
+            NSSound.beep()
+            return
+        }
+        let text = accessibility.getSelectedText()
         guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             NSSound.beep()
             return
@@ -189,25 +200,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     static func toggleActionPalette(prefilledText: String? = nil) {
         if UniversalOverlayController.shared.isVisible {
+            UniversalActionService.shared.cancel()
             UniversalOverlayController.shared.hide()
             return
         }
 
-        let selectedText = prefilledText ?? AccessibilityService.shared.getSelectedText()
-        let hasSelection = selectedText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        let hasClipboard = NSPasteboard.general.string(forType: .string)?.isEmpty == false
+        // Capture the target before showing the nonactivating panel. Provider
+        // output may only be applied back to this process.
         let frontmost = NSWorkspace.shared.frontmostApplication
+        UniversalActionService.shared.beginSession(
+            targetBundleIdentifier: frontmost?.bundleIdentifier ?? "",
+            processIdentifier: frontmost?.processIdentifier ?? 0,
+            applicationName: frontmost?.localizedName ?? "the original app"
+        )
+
+        let accessibility = AccessibilityService.shared
+        let selectedText = prefilledText ?? accessibility.getSelectedText()
+        let hasSelection = selectedText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let clipboardText = NSPasteboard.general.string(forType: .string)
+        let hasClipboard = clipboardText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         let context = AppContext(
             frontmostApp: AppInfo(
                 name: frontmost?.localizedName ?? "Unknown",
                 bundleId: frontmost?.bundleIdentifier ?? ""
             ),
-            selectedText: hasSelection ? selectedText : nil,
+            // Snapshot an explicitly labelled clipboard source when the palette
+            // opens. Reading the pasteboard again later could send newly copied,
+            // unrelated content to a provider without the preview reflecting the
+            // source the user originally chose.
+            selectedText: hasSelection ? selectedText : (hasClipboard ? clipboardText : nil),
             browserURL: nil,
             documentPath: nil,
             emailContent: nil,
             contextType: hasSelection ? .textSelection : (hasClipboard ? .clipboard : .empty),
-            needsPermission: false
+            needsPermission: !accessibility.hasAccessibilityPermission
         )
         UniversalOverlayController.shared.show(with: context)
     }

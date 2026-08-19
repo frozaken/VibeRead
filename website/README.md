@@ -35,8 +35,29 @@ The canonical production domain is `https://viberead.ai`.
 
 ## Privacy
 
-Vibe Read stores history and preferences locally. Audio is temporary and is
-removed after seven days by default. A user configured remote provider still
-receives audio or selected text when the user asks it to process that content.
-The provider applies its own terms. Users can instead configure a compatible
+Vibe Read stores history and preferences locally. Retained audio is removed
+after seven days by default, and **Immediately** removes successful and failed
+recordings as soon as their result is recorded.
+
+The desktop app connects directly to the providers configured by the user.
+Dictation can use ElevenLabs, Groq, OpenRouter, OpenAI, or a custom
+OpenAI-compatible endpoint. Cmd + E and custom dictation cleanup can use a
+separate OpenRouter, Groq, OpenAI, or custom provider. Remote providers receive
+audio or text only when the user asks them to process it, and each provider
+applies its own terms and retention policy.
+
+Provider keys are stored in macOS Keychain. Groq, OpenRouter, and OpenAI can
+each use one key across dictation and Cmd + E. ElevenLabs is dictation-only.
+Custom dictation and custom text use separate keys and endpoint URLs. Keys are
+never part of this static website. Users can also configure a compatible
 service running on their Mac.
+
+Launching Vibe Read and opening Settings do not read Keychain. The app reads a
+saved key only after explicit verification or intentional provider use, then
+caches it in memory until the app quits. Generic keys from older builds are not
+automatically discovered or migrated. Users must re-enter them for the provider
+they want to use.
+
+Vibe Read does not show system permission prompts at startup. macOS access is
+requested only after the user clicks Grant Access or intentionally uses a
+feature that needs it.

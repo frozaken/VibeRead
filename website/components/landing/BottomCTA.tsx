@@ -22,7 +22,9 @@ export function BottomCTA() {
                 Build your own Vibe Read.
             </h2>
             <p className="text-xl md:text-2xl text-[#FFFFEB]/80 mb-12 max-w-2xl mx-auto font-light">
-                Clone the repo, add your OpenAI-compatible provider, and run the Mac app locally. That is the whole setup.
+                Clone the repo, choose your providers and models, add your keys,
+                and build the Mac app in Xcode. Use your own bundle identifier
+                and signing identity if you distribute a fork.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Button asChild size="xl" className="h-16 px-10 rounded-full bg-[#E0CCFA] text-black hover:bg-[#D4BBF5] text-xl font-medium border border-black/5">

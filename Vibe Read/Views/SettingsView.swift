@@ -4,7 +4,7 @@ import AVFoundation
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
-    @State private var tab: Tab = .general
+    @State private var tab: Tab
 
     private enum Tab: String, CaseIterable, Identifiable {
         case general = "General"
@@ -23,6 +23,10 @@ struct SettingsView: View {
             case .about: return "info.circle"
             }
         }
+    }
+
+    init(startsOnProvider: Bool = false) {
+        _tab = State(initialValue: startsOnProvider ? .provider : .general)
     }
 
     var body: some View {
@@ -48,7 +52,7 @@ struct SettingsView: View {
                     Group {
                         switch tab {
                         case .general: LocalGeneralSettings()
-                        case .provider: AIProviderSettingsView()
+                        case .provider: ProviderConfigurationSettingsView()
                         case .shortcuts: LocalShortcutSettings()
                         case .storage: LocalDataSettingsView()
                         case .about: LocalAboutSettings()
@@ -58,16 +62,53 @@ struct SettingsView: View {
                 }
             }
         }
-        .frame(width: 820, height: 620)
+        .frame(width: 880, height: 700)
+        .onAppear {
+            if AIProviderSettings.shared.needsDictationSetup {
+                tab = .provider
+            }
+        }
     }
 }
 
 private struct LocalGeneralSettings: View {
     @EnvironmentObject private var settings: AppSettings
+    @ObservedObject private var accessibility = AccessibilityService.shared
     private let voices = InstantTTSService.availableVoices
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
+            SettingsSection(title: "Accessibility") {
+                Label(
+                    accessibility.hasAccessibilityPermission
+                        ? "Accessibility access granted"
+                        : "Selected text, function-key shortcuts, and pasting need access",
+                    systemImage: accessibility.hasAccessibilityPermission
+                        ? "checkmark.circle.fill"
+                        : "accessibility"
+                )
+                .foregroundColor(accessibility.hasAccessibilityPermission ? .green : .secondary)
+
+                if !accessibility.hasAccessibilityPermission {
+                    HStack {
+                        Button("Grant Access") {
+                            accessibility.requestAccessibilityPermission()
+                        }
+                        Button("Open System Settings") {
+                            accessibility.openAccessibilitySettings()
+                        }
+                        Button("Check Again") {
+                            accessibility.refreshAllPermissions()
+                        }
+                        .disabled(accessibility.isPollingForPermission)
+                    }
+                }
+
+                Text("Ordinary global shortcuts such as Cmd + E work without Accessibility. The app asks only for the features that need it.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             SettingsSection(title: "Dictation") {
                 Toggle("Paste after dictation", isOn: $settings.autoPasteAfterDictation)
                 Toggle("Sound effects", isOn: $settings.dictationSoundEffectsEnabled)
@@ -76,7 +117,7 @@ private struct LocalGeneralSettings: View {
             SettingsSection(title: "Local read-aloud") {
                 Picker("macOS voice", selection: $settings.preferredVoiceId) {
                     ForEach(voices, id: \.identifier) { voice in
-                        Text("\(voice.name) — \(voice.language)").tag(voice.identifier)
+                        Text("\(voice.name) · \(voice.language)").tag(voice.identifier)
                     }
                 }
                 HStack {
@@ -108,86 +149,9 @@ private struct LocalGeneralSettings: View {
     }
 }
 
-private struct AIProviderSettingsView: View {
-    @ObservedObject private var provider = AIProviderSettings.shared
-    @State private var apiKey = ""
-    @State private var status: String?
-    @State private var testing = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            SettingsSection(title: "OpenAI-compatible endpoint") {
-                TextField("Base URL", text: $provider.baseURL)
-                    .textFieldStyle(.roundedBorder)
-                Text("Examples: https://api.groq.com/openai/v1 or http://127.0.0.1:11434/v1")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-
-                SecureField(provider.hasAPIKey ? "API key saved — enter to replace" : "API key", text: $apiKey)
-                    .textFieldStyle(.roundedBorder)
-                HStack {
-                    Button("Save Key") {
-                        do {
-                            try provider.saveAPIKey(apiKey)
-                            apiKey = ""
-                            status = "Saved in macOS Keychain"
-                        } catch {
-                            status = error.localizedDescription
-                        }
-                    }
-                    .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    if provider.hasAPIKey {
-                        Button("Remove Key", role: .destructive) {
-                            do {
-                                try provider.clearAPIKey()
-                                status = "API key removed"
-                            } catch {
-                                status = error.localizedDescription
-                            }
-                        }
-                    }
-                }
-            }
-
-            SettingsSection(title: "Models") {
-                TextField("Transcription model", text: $provider.transcriptionModel)
-                    .textFieldStyle(.roundedBorder)
-                TextField("Text action model", text: $provider.textModel)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            HStack {
-                Button("Test Connection") { testConnection() }
-                    .disabled(testing)
-                if testing { ProgressView().controlSize(.small) }
-                if let status { Text(status).font(.caption).foregroundColor(.secondary) }
-            }
-
-            Label(
-                "Dictation audio and action text are sent directly to this endpoint. Vibe Read has no relay, account, analytics, or cloud database.",
-                systemImage: "hand.raised.fill"
-            )
-            .font(.caption)
-            .foregroundColor(.secondary)
-        }
-    }
-
-    private func testConnection() {
-        testing = true
-        status = nil
-        Task {
-            do {
-                try await APIService.shared.testProviderConnection()
-                await MainActor.run { status = "Connection succeeded"; testing = false }
-            } catch {
-                await MainActor.run { status = error.localizedDescription; testing = false }
-            }
-        }
-    }
-}
-
 private struct LocalShortcutSettings: View {
     @EnvironmentObject private var settings: AppSettings
+    @ObservedObject private var shortcutService = KeyboardShortcutService.shared
     @State private var editingAction: ShortcutAction?
     @State private var editingShortcutID: UUID?
 
@@ -195,6 +159,14 @@ private struct LocalShortcutSettings: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("All shortcuts are stored locally. Cmd+E is an ordinary action and can be rebound here.")
                 .foregroundColor(.secondary)
+
+            ForEach(shortcutService.shortcutRegistrationFailures.keys.sorted(), id: \.self) { action in
+                if let message = shortcutService.shortcutRegistrationFailures[action] {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
 
             ForEach(ShortcutAction.allCases) { action in
                 HStack {
@@ -241,7 +213,7 @@ private struct LocalDataSettingsView: View {
                         Text(option.displayName).tag(option)
                     }
                 }
-                Text("Transcripts stay until you delete them. Audio is removed after seven days by default; failed recordings remain retryable for up to seven days.")
+                Text(audioRetentionExplanation)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -257,6 +229,13 @@ private struct LocalDataSettingsView: View {
             Label("History is stored in Application Support/VibeRead/dictations.sqlite3. Nothing is synced.", systemImage: "internaldrive")
                 .font(.caption)
                 .foregroundColor(.secondary)
+
+            if let persistenceError = store.persistenceError {
+                Label(persistenceError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .confirmationDialog("Delete all retained audio?", isPresented: $confirmingClearAudio) {
             Button("Delete Audio", role: .destructive) { store.deleteAllAudio() }
@@ -265,11 +244,32 @@ private struct LocalDataSettingsView: View {
             Button("Delete Everything", role: .destructive) { store.clearAll() }
         }
     }
+
+    private var audioRetentionExplanation: String {
+        switch store.audioRetention {
+        case .immediately:
+            return "Audio is deleted as soon as its history row is saved. Failed recordings cannot be retried. Transcripts remain until you delete them."
+        case .oneDay:
+            return "Audio is kept for one day so failed recordings can be retried. Transcripts remain until you delete them."
+        case .sevenDays:
+            return "Audio is kept for seven days by default so failed recordings can be retried. Transcripts remain until you delete them."
+        case .thirtyDays:
+            return "Audio is kept for thirty days so failed recordings can be retried. Transcripts remain until you delete them."
+        case .never:
+            return "Audio and transcripts remain on this Mac until you delete them."
+        }
+    }
 }
 
 private struct LocalAboutSettings: View {
+    private let sourceURL = URL(string: "https://github.com/mathias-heide/VibeRead")!
+
     private var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Development"
+    }
+
+    private var build: String? {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String
     }
 
     var body: some View {
@@ -277,12 +277,14 @@ private struct LocalAboutSettings: View {
             Image(nsImage: NSImage(named: "AppIcon") ?? NSImage())
                 .resizable().frame(width: 64, height: 64)
             Text("Vibe Read").font(.title.bold())
-            Text("Version \(version)").foregroundColor(.secondary)
+            Text(build.map { "Version \(version) (\($0))" } ?? "Version \(version)")
+                .foregroundColor(.secondary)
             Text("A small, local-first macOS app for dictation, read-aloud, and rebindable text actions. No accounts, subscriptions, analytics, or Vibe Read cloud.")
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Open-source builds are updated by pulling the repository and rebuilding locally.")
+            Text("Vibe Read never checks for updates in the background. Open-source builds are updated by pulling the repository and rebuilding locally.")
                 .font(.caption)
                 .foregroundColor(.secondary)
+            Link("Source & Updates", destination: sourceURL)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

@@ -4,10 +4,10 @@ import Combine
 import Carbon.HIToolbox
 import CoreGraphics
 
-/// Service for monitoring global keyboard shortcuts including the fn key
-/// Uses NSEvent global monitor which only requires ACCESSIBILITY permission (not Input Monitoring!)
-///
-/// This is how apps like Wispr Flow do it - they only need Accessibility, not Input Monitoring.
+/// Routes configurable shortcuts through the narrowest macOS API that can
+/// represent them. Ordinary key chords use Carbon so they are globally
+/// reserved and consumed. fn and modifier-only shortcuts use NSEvent because
+/// they need press and release state that Carbon cannot express.
 class KeyboardShortcutService: ObservableObject {
     static let shared = KeyboardShortcutService()
 
@@ -23,6 +23,11 @@ class KeyboardShortcutService: ObservableObject {
     /// Whether we have Accessibility permission (this is ALL we need for fn key!)
     @Published var hasAccessibilityPermission = false
 
+    /// Ordinary chords are reserved through Carbon and therefore work even
+    /// before Accessibility is granted. Any entries here could not be reserved
+    /// exclusively, usually because another app already owns the chord.
+    @Published private(set) var shortcutRegistrationFailures: [String: String] = [:]
+
     // MARK: - Callbacks
 
     var onShortcutTriggered: ((ShortcutAction) -> Void)?
@@ -34,6 +39,18 @@ class KeyboardShortcutService: ObservableObject {
     private var localMonitor: Any?
     private var globalMonitor: Any?  // Global monitor - only needs Accessibility permission!
     private var cancellables = Set<AnyCancellable>()
+
+    // Carbon is the only system API in this app that reserves an ordinary
+    // global chord instead of passively observing it. fn-based and
+    // modifier-only shortcuts still use NSEvent because their press/release
+    // semantics cannot be represented by RegisterEventHotKey.
+    private static let hotKeySignature: OSType = 0x56425244 // "VBRD"
+    private var carbonEventHandler: EventHandlerRef?
+    private var carbonHotKeyReferences: [UInt32: EventHotKeyRef] = [:]
+    private var carbonShortcuts: [UInt32: CustomKeyboardShortcut] = [:]
+    private var carbonShortcutIDs = Set<UUID>()
+    private var activeCarbonPushToTalkID: UInt32?
+    private var activeCarbonOneShotID: UInt32?
 
     // State tracking
     private var isPushToTalkActive = false
@@ -52,19 +69,25 @@ class KeyboardShortcutService: ObservableObject {
 
     private func setupNotifications() {
         NotificationCenter.default.publisher(for: .shortcutsDidChange)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 print("[Shortcuts] Configuration changed")
-                self?.isPushToTalkActive = false
-                self?.activePushToTalkShortcut = nil
-                self?.activeOneShotShortcutID = nil
-                self?.fnAloneCandidate = false
+                guard let self else { return }
+                if self.isPushToTalkActive {
+                    self.endPushToTalk()
+                }
+                self.activeCarbonPushToTalkID = nil
+                self.activeCarbonOneShotID = nil
+                self.activeOneShotShortcutID = nil
+                self.fnAloneCandidate = false
+                self.registerCarbonHotKeys()
             }
             .store(in: &cancellables)
     }
 
     // MARK: - Permission Checking
 
-    /// Check Accessibility permission - this is ALL we need for fn key detection!
+    /// Accessibility is needed for fn/modifier observation, selection, and paste.
     @discardableResult
     func checkAccessibilityPermission() -> Bool {
         let trusted = AXIsProcessTrusted()
@@ -76,29 +99,32 @@ class KeyboardShortcutService: ObservableObject {
     // MARK: - Monitoring Control
 
     func startMonitoring() {
-        guard globalMonitor == nil else {
+        guard localMonitor == nil, carbonEventHandler == nil else {
             print("[Shortcuts] Already monitoring")
             return
         }
 
         print("[Shortcuts] Starting keyboard monitoring...")
 
+        // Reserve ordinary chords first. Carbon hotkeys do not require
+        // Accessibility and, unlike NSEvent monitors, keep Cmd+E from also
+        // reaching the foreground application.
+        installCarbonEventHandlerIfNeeded()
+        registerCarbonHotKeys()
+        setupLocalMonitor()
+
         // Check Accessibility permission
         let hasPermission = checkAccessibilityPermission()
 
         if !hasPermission {
-            print("[Shortcuts] ⚠️ No Accessibility permission - global shortcuts won't work")
-            print("[Shortcuts] User needs to grant Accessibility in System Settings")
-            // Still set up local monitor for when app is focused
-            setupLocalMonitor()
+            print("[Shortcuts] Accessibility is needed for fn shortcuts, selection, and pasting")
             return
         }
 
-        // Set up both local and global monitors
-        setupLocalMonitor()
+        // fn and modifier-only shortcuts still need press/release observation.
         setupGlobalMonitor()
 
-        print("[Shortcuts] ✓ Keyboard monitoring active - fn key shortcuts will work!")
+        print("[Shortcuts] Keyboard monitoring active")
     }
 
     /// Set up local monitor - works without any permissions when app is focused
@@ -113,12 +139,10 @@ class KeyboardShortcutService: ObservableObject {
         print("[Shortcuts] ✓ Local monitor active")
     }
 
-    /// Set up global monitor - requires Accessibility permission (NOT Input Monitoring!)
+    /// Set up global monitor for fn and modifier-only shortcuts.
     private func setupGlobalMonitor() {
         guard globalMonitor == nil else { return }
 
-        // This is the key: NSEvent.addGlobalMonitorForEvents only needs Accessibility permission
-        // It can detect flagsChanged which includes the fn key modifier
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged, .keyDown, .keyUp]) { [weak self] event in
             self?.handleNSEvent(event, isGlobal: true)
         }
@@ -128,8 +152,15 @@ class KeyboardShortcutService: ObservableObject {
 
     /// Retry monitoring after permission is granted
     func retryEventTapSetup() {
-        stopMonitoring()
-        startMonitoring()
+        if carbonEventHandler == nil {
+            installCarbonEventHandlerIfNeeded()
+            registerCarbonHotKeys()
+        }
+        let hasPermission = checkAccessibilityPermission()
+        setupLocalMonitor()
+        if hasPermission {
+            setupGlobalMonitor()
+        }
     }
 
     func stopMonitoring() {
@@ -141,7 +172,199 @@ class KeyboardShortcutService: ObservableObject {
             NSEvent.removeMonitor(monitor)
             globalMonitor = nil
         }
+        unregisterCarbonHotKeys()
+        if let carbonEventHandler {
+            RemoveEventHandler(carbonEventHandler)
+            self.carbonEventHandler = nil
+        }
         print("[Shortcuts] Stopped monitoring")
+    }
+
+    // MARK: - Reserved Carbon Hotkeys
+
+    private static let carbonHotKeyHandler: EventHandlerUPP = { _, event, userData in
+        guard let event, let userData else { return OSStatus(eventNotHandledErr) }
+
+        var hotKeyID = EventHotKeyID()
+        var actualSize = 0
+        let parameterStatus = GetEventParameter(
+            event,
+            EventParamName(kEventParamDirectObject),
+            EventParamType(typeEventHotKeyID),
+            nil,
+            MemoryLayout<EventHotKeyID>.size,
+            &actualSize,
+            &hotKeyID
+        )
+        guard parameterStatus == noErr,
+              hotKeyID.signature == KeyboardShortcutService.hotKeySignature else {
+            return OSStatus(eventNotHandledErr)
+        }
+
+        let service = Unmanaged<KeyboardShortcutService>
+            .fromOpaque(userData)
+            .takeUnretainedValue()
+        let identifier = hotKeyID.id
+        let eventKind = GetEventKind(event)
+        DispatchQueue.main.async {
+            service.handleCarbonHotKey(id: identifier, eventKind: eventKind)
+        }
+        return noErr
+    }
+
+    private func installCarbonEventHandlerIfNeeded() {
+        guard carbonEventHandler == nil else { return }
+
+        let eventTypes = [
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyPressed)
+            ),
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyReleased)
+            )
+        ]
+        var handler: EventHandlerRef?
+        let status = eventTypes.withUnsafeBufferPointer { buffer in
+            InstallEventHandler(
+                GetApplicationEventTarget(),
+                Self.carbonHotKeyHandler,
+                buffer.count,
+                buffer.baseAddress,
+                Unmanaged.passUnretained(self).toOpaque(),
+                &handler
+            )
+        }
+        guard status == noErr else {
+            print("[Shortcuts] Could not install reserved-hotkey handler (OSStatus \(status))")
+            return
+        }
+        carbonEventHandler = handler
+    }
+
+    private func registerCarbonHotKeys() {
+        unregisterCarbonHotKeys()
+        shortcutRegistrationFailures = [:]
+        installCarbonEventHandlerIfNeeded()
+        guard carbonEventHandler != nil else { return }
+
+        var nextIdentifier: UInt32 = 1
+        for shortcut in AppSettings.shared.shortcuts {
+            guard let representation = carbonRepresentation(for: shortcut) else { continue }
+            // Carbon-eligible shortcuts must never fall back to passive
+            // NSEvent observation. If reservation fails, firing the action
+            // while also leaking the chord to the foreground app is worse
+            // than leaving the shortcut unavailable and reporting the error.
+            carbonShortcutIDs.insert(shortcut.id)
+
+            let hotKeyID = EventHotKeyID(
+                signature: Self.hotKeySignature,
+                id: nextIdentifier
+            )
+            var reference: EventHotKeyRef?
+            let status = RegisterEventHotKey(
+                representation.keyCode,
+                representation.modifiers,
+                hotKeyID,
+                GetApplicationEventTarget(),
+                OptionBits(kEventHotKeyExclusive),
+                &reference
+            )
+
+            if status == noErr, let reference {
+                carbonHotKeyReferences[nextIdentifier] = reference
+                carbonShortcuts[nextIdentifier] = shortcut
+                nextIdentifier += 1
+            } else {
+                shortcutRegistrationFailures[shortcut.action.rawValue] =
+                    "Could not reserve \(shortcut.displayString) (OSStatus \(status))"
+                print("[Shortcuts] Could not reserve \(shortcut.action.displayName)")
+            }
+        }
+    }
+
+    private func unregisterCarbonHotKeys() {
+        for reference in carbonHotKeyReferences.values {
+            UnregisterEventHotKey(reference)
+        }
+        carbonHotKeyReferences.removeAll()
+        carbonShortcuts.removeAll()
+        carbonShortcutIDs.removeAll()
+        activeCarbonPushToTalkID = nil
+        activeCarbonOneShotID = nil
+    }
+
+    static func carbonRepresentation(
+        for keys: [KeyCode]
+    ) -> (keyCode: UInt32, modifiers: UInt32)? {
+        guard !keys.contains(.fn) else { return nil }
+
+        let ordinaryKeys = keys.filter { !$0.isModifier }
+        guard ordinaryKeys.count == 1,
+              let ordinaryKey = ordinaryKeys.first,
+              let ordinaryKeyCode = ordinaryKey.cgKeyCode else {
+            return nil
+        }
+
+        // Never reserve a bare letter, number, Return, or Space system-wide.
+        // Function keys are intentionally useful as single-key bindings.
+        let hasChordModifier = keys.contains {
+            [.command, .shift, .option, .control].contains($0)
+        }
+        guard hasChordModifier || ordinaryKey.isFunctionKey else { return nil }
+
+        var modifiers: UInt32 = 0
+        for key in keys {
+            switch key {
+            case .command: modifiers |= UInt32(cmdKey)
+            case .shift: modifiers |= UInt32(shiftKey)
+            case .option: modifiers |= UInt32(optionKey)
+            case .control: modifiers |= UInt32(controlKey)
+            default: break
+            }
+        }
+        return (UInt32(ordinaryKeyCode), modifiers)
+    }
+
+    private func carbonRepresentation(
+        for shortcut: CustomKeyboardShortcut
+    ) -> (keyCode: UInt32, modifiers: UInt32)? {
+        Self.carbonRepresentation(for: shortcut.keys)
+    }
+
+    private func handleCarbonHotKey(id: UInt32, eventKind: UInt32) {
+        guard let shortcut = carbonShortcuts[id] else { return }
+
+        switch eventKind {
+        case UInt32(kEventHotKeyPressed):
+            guard AppSettings.shared.dictationHotkeyEnabled,
+                  !isRecording else { return }
+            guard activeCarbonOneShotID != id,
+                  activeCarbonPushToTalkID != id else { return }
+            if shortcut.action == .pushToTalk {
+                guard !isPushToTalkActive else { return }
+                activeCarbonPushToTalkID = id
+                isPushToTalkActive = true
+                activePushToTalkShortcut = shortcut
+                onPushToTalkStart?()
+            } else {
+                activeCarbonOneShotID = id
+                onShortcutTriggered?(shortcut.action)
+            }
+
+        case UInt32(kEventHotKeyReleased):
+            if activeCarbonPushToTalkID == id {
+                activeCarbonPushToTalkID = nil
+                endPushToTalk()
+            }
+            if activeCarbonOneShotID == id {
+                activeCarbonOneShotID = nil
+            }
+
+        default:
+            break
+        }
     }
 
     // MARK: - Event Handling (NSEvent-based)
@@ -246,6 +469,13 @@ class KeyboardShortcutService: ObservableObject {
 
         // Check for matching shortcut
         if let shortcut = findMatchingShortcut(for: currentlyPressedKeys) {
+            // Bare typing keys are not valid global actions. Function keys
+            // are Carbon-managed above; NSEvent is reserved for real chords.
+            guard shortcut.keys.contains(where: \.isModifier) else { return }
+            // Every ordinary chord belongs exclusively to Carbon. Ignore its
+            // NSEvent copy even when registration failed, otherwise the action
+            // and the foreground app would both receive the shortcut.
+            if carbonRepresentation(for: shortcut) != nil { return }
             activate(shortcut)
         }
     }
@@ -367,6 +597,9 @@ class KeyboardShortcutService: ObservableObject {
     // MARK: - Recording Mode
 
     func startRecording() {
+        // Existing reserved chords would otherwise be consumed before the
+        // focused shortcut editor can record them.
+        unregisterCarbonHotKeys()
         isRecording = true
         recordedKeys = []
         currentlyPressedKeys = []
@@ -377,6 +610,7 @@ class KeyboardShortcutService: ObservableObject {
         isRecording = false
         let keys = recordedKeys
         recordedKeys = []
+        registerCarbonHotKeys()
         print("[Shortcuts] Stopped recording: \(keys.map { $0.displayName })")
         return keys
     }
@@ -384,6 +618,7 @@ class KeyboardShortcutService: ObservableObject {
     func cancelRecording() {
         isRecording = false
         recordedKeys = []
+        registerCarbonHotKeys()
         print("[Shortcuts] Cancelled recording")
     }
 }
@@ -392,6 +627,16 @@ private extension KeyCode {
     var isModifier: Bool {
         switch self {
         case .fn, .control, .option, .command, .shift:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var isFunctionKey: Bool {
+        switch self {
+        case .f1, .f2, .f3, .f4, .f5, .f6,
+             .f7, .f8, .f9, .f10, .f11, .f12:
             return true
         default:
             return false

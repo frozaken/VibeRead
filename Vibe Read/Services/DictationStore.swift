@@ -42,7 +42,7 @@ struct DictationDateGroup: Identifiable {
 
 final class DictationStore: ObservableObject {
     enum AudioRetention: Int, CaseIterable, Codable, Identifiable {
-        /// Remove a successful recording as soon as its transcript is saved.
+        /// Remove a recording as soon as its history row is saved.
         case immediately = 0
         case oneDay = 1
         case sevenDays = 7
@@ -108,6 +108,8 @@ final class DictationStore: ObservableObject {
     @Published var isLoading = false
     @Published private(set) var hasMore = false
     @Published private(set) var persistenceError: String?
+    @Published private(set) var retryingIDs: Set<UUID> = []
+    @Published private(set) var retryErrors: [UUID: String] = [:]
     @Published var audioRetention: AudioRetention {
         didSet {
             defaults.set(audioRetention.rawValue, forKey: Self.audioRetentionDefaultsKey)
@@ -125,6 +127,8 @@ final class DictationStore: ObservableObject {
     private let audioDirectory: URL
     private var database: LocalDictationDatabase?
     private var displayLimit = DictationStore.pageSize
+    private var retryTasks: [UUID: Task<Void, Never>] = [:]
+    private var retryGenerations: [UUID: UUID] = [:]
 
     /// Kept as an instance accessor so existing views and recording code do not
     /// need to know about the database layout. There is no user scoping.
@@ -213,9 +217,8 @@ final class DictationStore: ObservableObject {
         )
     }
 
-    /// Saves a failed recording as a retryable history row. Failed audio is
-    /// retained by the chosen day-based policy; with "Immediately" selected it
-    /// receives the default seven-day retry window instead of being discarded.
+    /// Saves a failed recording as a retryable history row when the selected
+    /// audio-retention policy keeps the underlying file.
     func addFailed(
         audioURL: URL,
         durationMs: Int? = nil,
@@ -232,6 +235,7 @@ final class DictationStore: ObservableObject {
     }
 
     func delete(_ item: DictationHistoryItem) {
+        cancelRetry(item)
         performOnMain { [weak self] in
             guard let self, let database = self.database else { return }
 
@@ -253,8 +257,14 @@ final class DictationStore: ObservableObject {
     }
 
     func clearAll() {
+        cancelAllRetries()
         performOnMain { [weak self] in
             guard let self, let database = self.database else { return }
+
+            // A late provider response must not recreate history after the user
+            // explicitly deletes it. This also removes recordings that have not
+            // reached the database yet.
+            DictationService.shared.discardActiveWork()
 
             do {
                 if self.fileManager.fileExists(atPath: self.audioDirectory.path) {
@@ -297,19 +307,31 @@ final class DictationStore: ObservableObject {
     // MARK: - Retry
 
     func retryTranscription(_ item: DictationHistoryItem) {
+        guard retryTasks[item.id] == nil else { return }
         guard let audioURL = item.audioFileURL else {
+            retryErrors[item.id] = "The retained recording is no longer available"
             return
         }
 
+        retryErrors[item.id] = nil
+        retryingIDs.insert(item.id)
         isLoading = true
-        Task {
+        let retryGeneration = UUID()
+        retryGenerations[item.id] = retryGeneration
+        let activeMode = AppSettings.shared.activeDictationMode
+        let transformPrompt = activeMode.hasCustomPrompt ? activeMode.systemPrompt : nil
+        retryTasks[item.id] = Task { [weak self] in
+            guard let self else { return }
             do {
                 let result = try await APIService.shared.transcribeDictation(
                     audioURL: audioURL,
-                    vocabulary: AppSettings.shared.customVocabulary
+                    vocabulary: AppSettings.shared.customVocabulary,
+                    transformPrompt: transformPrompt
                 )
+                try Task.checkCancellation()
 
                 await MainActor.run {
+                    guard self.retryGenerations[item.id] == retryGeneration else { return }
                     do {
                         try self.database?.updateTranscription(
                             id: item.id,
@@ -321,15 +343,47 @@ final class DictationStore: ObservableObject {
                         self.refreshDisplayedItems()
                     } catch {
                         self.record(error)
+                        self.retryErrors[item.id] = error.localizedDescription
                     }
-                    self.isLoading = false
+                    self.finishRetry(item.id, generation: retryGeneration)
                 }
             } catch {
                 await MainActor.run {
-                    self.isLoading = false
+                    guard self.retryGenerations[item.id] == retryGeneration else { return }
+                    if !(error is CancellationError) {
+                        self.retryErrors[item.id] = error.localizedDescription
+                    }
+                    self.finishRetry(item.id, generation: retryGeneration)
                 }
             }
         }
+    }
+
+    func cancelRetry(_ item: DictationHistoryItem) {
+        retryGenerations[item.id] = nil
+        retryTasks[item.id]?.cancel()
+        finishRetry(item.id)
+    }
+
+    func clearRetryError(for item: DictationHistoryItem) {
+        retryErrors[item.id] = nil
+    }
+
+    private func finishRetry(_ id: UUID, generation: UUID? = nil) {
+        if let generation, retryGenerations[id] != generation { return }
+        retryGenerations[id] = nil
+        retryTasks[id] = nil
+        retryingIDs.remove(id)
+        isLoading = !retryTasks.isEmpty
+    }
+
+    private func cancelAllRetries() {
+        retryTasks.values.forEach { $0.cancel() }
+        retryTasks.removeAll()
+        retryGenerations.removeAll()
+        retryingIDs.removeAll()
+        retryErrors.removeAll()
+        isLoading = false
     }
 
     // MARK: - Audio Retention
@@ -342,7 +396,16 @@ final class DictationStore: ObservableObject {
         do {
             let currentDate = now()
             let configuredCutoff = audioRetention.cutoff(relativeTo: currentDate)
-            let failedRetryCutoff = AudioRetention.sevenDays.cutoff(relativeTo: currentDate)
+            // `Never` applies only to recordings represented in history. A
+            // crash between copying audio and committing its row can leave an
+            // inaccessible orphan, so even that policy gives untracked files a
+            // seven-day cleanup ceiling.
+            let orphanCutoff = configuredCutoff
+                ?? Calendar(identifier: .gregorian).date(
+                    byAdding: .day,
+                    value: -AudioRetention.sevenDays.rawValue,
+                    to: currentDate
+                )
             let references = try database.audioReferences()
             var clearedReferenceIDs: [UUID] = []
             var referencedPaths = Set<String>()
@@ -354,10 +417,7 @@ final class DictationStore: ObservableObject {
                     continue
                 }
 
-                let cutoff = audioRetention == .immediately && reference.isRetryableFailure
-                    ? failedRetryCutoff
-                    : configuredCutoff
-                let isExpired = cutoff.map { reference.createdAt <= $0 } ?? false
+                let isExpired = configuredCutoff.map { reference.createdAt <= $0 } ?? false
                 let exists = fileManager.fileExists(atPath: audioURL.path)
                 guard isExpired || !exists else { continue }
 
@@ -373,7 +433,7 @@ final class DictationStore: ObservableObject {
             }
 
             try database.clearAudioReferences(ids: clearedReferenceIDs)
-            try cleanupOrphanedAudio(referencedPaths: referencedPaths, cutoff: configuredCutoff)
+            try cleanupOrphanedAudio(referencedPaths: referencedPaths, cutoff: orphanCutoff)
         } catch {
             record(error)
         }
@@ -417,6 +477,23 @@ final class DictationStore: ObservableObject {
             let normalized = try decoded.map { try normalizeLegacyItem($0, sourceKey: key) }
             _ = try database.importLegacyItems(normalized, sourceKey: key)
 
+            // Delete a migrated source only after SQLite has durably committed
+            // the replacement reference, and only when it is a recognized audio
+            // file below a known Vibe Read Application Support directory. An
+            // arbitrary absolute path from legacy JSON is never deleted.
+            for (original, migrated) in zip(decoded, normalized) {
+                if let sourceURL = safeLegacySourceForRemoval(
+                    original: original,
+                    migrated: migrated
+                ) {
+                    do {
+                        try fileManager.removeItem(at: sourceURL)
+                    } catch {
+                        record(error)
+                    }
+                }
+            }
+
             // SQLite has durably committed the whole source (or confirmed a
             // prior commit), so its duplicate UserDefaults copy can go.
             defaults.removeObject(forKey: key)
@@ -435,17 +512,20 @@ final class DictationStore: ObservableObject {
         if pathURL.path == path, path.hasPrefix("/") {
             if let relativePath = relativeAudioPath(for: pathURL) {
                 normalized.audioFilePath = relativePath
-            } else if fileManager.fileExists(atPath: pathURL.path) {
+            } else {
                 let fileExtension = pathURL.pathExtension
                 let destinationName = "migrated_\(item.id.uuidString)"
                     + (fileExtension.isEmpty ? "" : ".\(fileExtension)")
                 let destinationURL = audioDirectory.appendingPathComponent(destinationName)
-                if !fileManager.fileExists(atPath: destinationURL.path) {
+                if fileManager.fileExists(atPath: pathURL.path),
+                   !fileManager.fileExists(atPath: destinationURL.path) {
                     try fileManager.copyItem(at: pathURL, to: destinationURL)
                 }
-                normalized.audioFilePath = destinationName
-            } else {
-                normalized.audioFilePath = nil
+                // A previous migration may have copied and committed this
+                // deterministic destination before source cleanup or a crash.
+                normalized.audioFilePath = fileManager.fileExists(atPath: destinationURL.path)
+                    ? destinationName
+                    : nil
             }
             return normalized
         }
@@ -499,6 +579,45 @@ final class DictationStore: ObservableObject {
             return nil
         }
         return scope
+    }
+
+    private func safeLegacySourceForRemoval(
+        original: DictationHistoryItem,
+        migrated: DictationHistoryItem
+    ) -> URL? {
+        guard let originalPath = original.audioFilePath,
+              originalPath.hasPrefix("/"),
+              let migratedPath = migrated.audioFilePath,
+              let destinationURL = audioURL(forRelativePath: migratedPath),
+              fileManager.fileExists(atPath: destinationURL.path) else {
+            return nil
+        }
+
+        let sourceURL = URL(fileURLWithPath: originalPath)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        guard sourceURL != destinationURL.standardizedFileURL.resolvingSymlinksInPath(),
+              fileManager.fileExists(atPath: sourceURL.path),
+              ["m4a", "wav", "aac", "caf", "aif", "aiff", "mp3", "mp4"]
+                .contains(sourceURL.pathExtension.lowercased()) else {
+            return nil
+        }
+
+        let applicationSupport = rootDirectory.deletingLastPathComponent()
+        let knownOwnedRoots = [
+            rootDirectory,
+            applicationSupport.appendingPathComponent("Vibe Read", isDirectory: true)
+        ]
+        guard knownOwnedRoots.contains(where: { root in
+            let resolvedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+            let rootPath = resolvedRoot.path.hasSuffix("/")
+                ? resolvedRoot.path
+                : resolvedRoot.path + "/"
+            return sourceURL.path.hasPrefix(rootPath)
+        }) else {
+            return nil
+        }
+        return sourceURL
     }
 
     // MARK: - Helpers

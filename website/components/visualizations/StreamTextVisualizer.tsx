@@ -34,7 +34,7 @@ export function StreamTextVisualizer({ rawText, processedText, className }: Stre
   }, [reduceMotion, words.length]);
 
   return (
-    <div aria-label="Spoken words becoming a cleaned dictation" className={cn("relative w-full h-[400px] bg-[#1A1A1A] rounded-[2.5rem] overflow-hidden border border-white/10", className)} role="img">
+    <div aria-label="An optional cleanup prompt turning spoken words into revised text" className={cn("relative w-full h-[400px] bg-[#1A1A1A] rounded-[2.5rem] overflow-hidden border border-white/10", className)} role="img">
       {/* Background Flow Curve */}
       <div className="absolute inset-0 opacity-20 pointer-events-none">
         <svg aria-hidden="true" className="w-full h-full" preserveAspectRatio="none">
@@ -108,7 +108,7 @@ export function StreamTextVisualizer({ rawText, processedText, className }: Stre
                 ))}
             </p>
             <div className="mt-4 flex items-center gap-2 text-xs text-[#E0CCFA]/60 font-mono uppercase tracking-wider">
-                <Sparkles className="w-3 h-3" /> Cleaning up speech
+                <Sparkles className="w-3 h-3" /> Optional cleanup
             </div>
         </div>
       </div>

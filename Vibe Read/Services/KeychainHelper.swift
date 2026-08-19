@@ -3,6 +3,7 @@ import Security
 
 enum KeychainError: LocalizedError {
     case couldNotEncodeSecret
+    case couldNotDecodeSecret
     case couldNotVerifySecret
     case operationFailed(OSStatus)
 
@@ -10,6 +11,8 @@ enum KeychainError: LocalizedError {
         switch self {
         case .couldNotEncodeSecret:
             return "The API key could not be encoded for Keychain storage."
+        case .couldNotDecodeSecret:
+            return "The API key stored in macOS Keychain could not be read as text."
         case .couldNotVerifySecret:
             return "The API key could not be verified after saving it to macOS Keychain."
         case .operationFailed(let status):
@@ -25,8 +28,10 @@ final class KeychainHelper {
 
     /// Namespace secrets by the installed app rather than a hosted-service
     /// identifier, so independently built forks do not share Keychain items.
+    /// Version 2 intentionally does not discover or reuse keys created by old
+    /// builds or external tooling. Users add each key explicitly in Settings.
     private var service: String {
-        "\(Bundle.main.bundleIdentifier ?? "VibeRead").local-secrets"
+        "\(Bundle.main.bundleIdentifier ?? "VibeRead").local-provider-secrets.v2"
     }
 
     private init() {}
@@ -42,10 +47,11 @@ final class KeychainHelper {
             kSecAttrAccount as String: key
         ]
 
-        let updateStatus = SecItemUpdate(
-            lookup as CFDictionary,
-            [kSecValueData as String: data] as CFDictionary
-        )
+        let update: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        let updateStatus = SecItemUpdate(lookup as CFDictionary, update as CFDictionary)
         if updateStatus == errSecSuccess { return }
         guard updateStatus == errSecItemNotFound else {
             throw KeychainError.operationFailed(updateStatus)
@@ -53,13 +59,14 @@ final class KeychainHelper {
 
         var insertion = lookup
         insertion[kSecValueData as String] = data
+        insertion[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let addStatus = SecItemAdd(insertion as CFDictionary, nil)
         guard addStatus == errSecSuccess else {
             throw KeychainError.operationFailed(addStatus)
         }
     }
 
-    func get(key: String) -> String? {
+    func read(key: String) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -69,12 +76,21 @@ final class KeychainHelper {
 
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        guard status == errSecSuccess, let data = result as? Data else {
-            return nil
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else {
+            throw KeychainError.operationFailed(status)
         }
+        guard let data = result as? Data,
+              let value = String(data: data, encoding: .utf8) else {
+            throw KeychainError.couldNotDecodeSecret
+        }
+        return value
+    }
 
-        return String(data: data, encoding: .utf8)
+    /// Compatibility helper for callers that can only treat an unavailable
+    /// secret as missing. Launch and Settings rendering never call this.
+    func get(key: String) -> String? {
+        try? read(key: key)
     }
 
     func delete(key: String) throws {

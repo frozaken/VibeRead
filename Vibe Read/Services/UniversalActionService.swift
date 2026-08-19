@@ -2,16 +2,103 @@ import Foundation
 import AppKit
 import Combine
 
-/// Executes the deliberately small, local-first Cmd+E action set.
+enum UniversalActionError: Error, LocalizedError, Equatable {
+    case emptyInput
+    case noOutput
+    case accessibilityRequired
+    case originalApplicationUnavailable
+    case targetApplicationChanged(String)
+    case pasteFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyInput:
+            return "Select text or choose the labelled clipboard source first."
+        case .noOutput:
+            return "There is no generated text to apply."
+        case .accessibilityRequired:
+            return "Grant Accessibility access before applying text."
+        case .originalApplicationUnavailable:
+            return "The original application is no longer available. Copy the result instead."
+        case .targetApplicationChanged(let name):
+            return "Focus \(name) again before applying, or copy the result."
+        case .pasteFailed:
+            return "Vibe Read could not apply the text. Copy the result instead."
+        }
+    }
+}
+
+struct UniversalActionTarget: Equatable, Sendable {
+    let bundleIdentifier: String
+    let processIdentifier: pid_t
+    let applicationName: String
+}
+
+/// Executes the deliberately small, local-first Cmd+E action set. Provider
+/// output is always previewed. It is never pasted until the user explicitly
+/// chooses Apply, and Apply is limited to the application that opened Cmd+E.
 @MainActor
 final class UniversalActionService: ObservableObject {
+    typealias TransformOperation = @Sendable (String, String) async throws -> String
+    typealias CurrentApplication = () -> UniversalActionTarget?
+    typealias AccessibilityReadiness = () -> Bool
+    typealias PasteOperation = (String, UniversalActionTarget?) -> Bool
+
     static let shared = UniversalActionService()
 
-    @Published var isProcessing = false
-    @Published var lastError: Error?
-    @Published var lastOutput: String?
+    @Published private(set) var isProcessing = false
+    @Published private(set) var lastError: Error?
+    @Published private(set) var lastOutput: String?
+    @Published private(set) var didCopyOutput = false
 
-    private init() {}
+    private let transform: TransformOperation
+    private let currentApplication: CurrentApplication
+    private let isAccessibilityReady: AccessibilityReadiness
+    private let paste: PasteOperation
+    private var actionTask: Task<Void, Never>?
+    private var generationID: UUID?
+    private var targetApplication: UniversalActionTarget?
+
+    init(
+        transform: @escaping TransformOperation = { text, prompt in
+            try await APIService.shared.transformText(text, systemPrompt: prompt)
+        },
+        currentApplication: @escaping CurrentApplication = {
+            guard let application = NSWorkspace.shared.frontmostApplication else { return nil }
+            return UniversalActionTarget(
+                bundleIdentifier: application.bundleIdentifier ?? "",
+                processIdentifier: application.processIdentifier,
+                applicationName: application.localizedName ?? "the original app"
+            )
+        },
+        isAccessibilityReady: @escaping AccessibilityReadiness = {
+            AccessibilityService.shared.checkPermission()
+        },
+        paste: @escaping PasteOperation = { text, target in
+            AccessibilityService.shared.pasteText(text, expectedTarget: target)
+        }
+    ) {
+        self.transform = transform
+        self.currentApplication = currentApplication
+        self.isAccessibilityReady = isAccessibilityReady
+        self.paste = paste
+    }
+
+    func beginSession(
+        targetBundleIdentifier: String,
+        processIdentifier: pid_t,
+        applicationName: String
+    ) {
+        cancel()
+        lastError = nil
+        lastOutput = nil
+        didCopyOutput = false
+        targetApplication = UniversalActionTarget(
+            bundleIdentifier: targetBundleIdentifier,
+            processIdentifier: processIdentifier,
+            applicationName: applicationName
+        )
+    }
 
     func readSelection(_ text: String, source: String? = nil) async {
         _ = source
@@ -25,9 +112,11 @@ final class UniversalActionService: ObservableObject {
             NSSound.beep()
             return
         }
-        await readSelection(text)
+        await readSelection(text, source: "clipboard")
     }
 
+    /// Explicit user-requested copy. Unlike selection detection, this is never
+    /// used as an invisible fallback.
     func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -38,29 +127,117 @@ final class UniversalActionService: ObservableObject {
             NSSound.beep()
             return
         }
-        AccessibilityService.shared.pasteText(text)
-    }
-
-    /// Runs a user-defined prompt through their configured provider and
-    /// replaces the selected text with the result.
-    func run(_ action: LocalTextAction, on text: String) async {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard paste(text, nil) else {
+            lastError = UniversalActionError.accessibilityRequired
             NSSound.beep()
             return
         }
+    }
 
+    /// Starts a cancellable provider request. Completion only updates preview
+    /// state; it never writes to the focused application.
+    func run(_ action: LocalTextAction, on text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            lastError = UniversalActionError.emptyInput
+            return
+        }
+
+        actionTask?.cancel()
+        let requestID = UUID()
+        generationID = requestID
         isProcessing = true
         lastError = nil
-        defer { isProcessing = false }
+        lastOutput = nil
+        didCopyOutput = false
+        let transform = self.transform
 
-        do {
-            let output = try await APIService.shared.transformText(text, systemPrompt: action.prompt)
-            lastOutput = output
-            AccessibilityService.shared.pasteText(output)
-        } catch {
-            lastError = error
-            NSSound.beep()
+        actionTask = Task { [weak self] in
+            do {
+                let output = try await transform(text, action.prompt)
+                try Task.checkCancellation()
+                guard let self, self.generationID == requestID else { return }
+                self.lastOutput = output
+                self.isProcessing = false
+                self.actionTask = nil
+                self.generationID = nil
+            } catch is CancellationError {
+                guard let self, self.generationID == requestID else { return }
+                self.isProcessing = false
+                self.actionTask = nil
+                self.generationID = nil
+            } catch {
+                guard let self, self.generationID == requestID else { return }
+                self.lastError = error
+                self.isProcessing = false
+                self.actionTask = nil
+                self.generationID = nil
+            }
         }
+    }
+
+    func cancel() {
+        generationID = nil
+        actionTask?.cancel()
+        actionTask = nil
+        isProcessing = false
+    }
+
+    @discardableResult
+    func copyLastOutput() -> Bool {
+        guard let output = lastOutput, !output.isEmpty else {
+            lastError = UniversalActionError.noOutput
+            return false
+        }
+        copy(output)
+        lastError = nil
+        didCopyOutput = true
+        return true
+    }
+
+    /// Applies the preview only if focus is still in the application that
+    /// opened Cmd+E. The explicit Apply button remains the final confirmation.
+    @discardableResult
+    func applyLastOutput() -> Bool {
+        guard let output = lastOutput, !output.isEmpty else {
+            lastError = UniversalActionError.noOutput
+            return false
+        }
+        guard isAccessibilityReady() else {
+            lastError = UniversalActionError.accessibilityRequired
+            return false
+        }
+        guard let targetApplication else {
+            lastError = UniversalActionError.originalApplicationUnavailable
+            return false
+        }
+        guard Self.targetMatches(targetApplication, currentApplication()) else {
+            lastError = UniversalActionError.targetApplicationChanged(
+                targetApplication.applicationName
+            )
+            return false
+        }
+        guard paste(output, targetApplication) else {
+            lastError = UniversalActionError.pasteFailed
+            return false
+        }
+        lastError = nil
+        return true
+    }
+
+    func clearResult() {
+        lastError = nil
+        lastOutput = nil
+        didCopyOutput = false
+    }
+
+    static func targetMatches(
+        _ expected: UniversalActionTarget,
+        _ current: UniversalActionTarget?
+    ) -> Bool {
+        guard let current else { return false }
+        return expected.processIdentifier == current.processIdentifier
+            && (expected.bundleIdentifier.isEmpty
+                || expected.bundleIdentifier == current.bundleIdentifier)
     }
 
     func openVibeRead() {

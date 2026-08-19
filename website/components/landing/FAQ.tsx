@@ -56,23 +56,31 @@ export function FAQ() {
           />
           <FAQItem
             question="Does Vibe Read upload my dictations?"
-            answer="Vibe Read has no cloud database. Dictation history stays on your Mac. Audio goes only to the OpenAI compatible provider you configure."
+            answer="Vibe Read has no cloud database. History stays on your Mac. Recorded audio goes directly to the dictation provider you choose. A custom cleanup prompt also sends the raw transcript and prompt to your chosen text provider. Each provider applies its own data policy."
+          />
+          <FAQItem
+            question="Does it ask for permissions at launch?"
+            answer="No. Vibe Read does not show system permission prompts at startup. macOS access is requested only after you click Grant Access or intentionally use a feature that needs it."
           />
           <FAQItem
             question="Do I need an account or subscription?"
-            answer="No. There is no Vibe Read account, billing, team workspace, or product analytics."
+            answer="There is no Vibe Read account, billing, team workspace, or product analytics. A remote AI provider may require its own account, API key, and usage payment."
           />
           <FAQItem
             question="What happens to local audio files?"
-            answer="Local audio files are removed after seven days by default. You can change the retention period or clear them sooner in settings."
+            answer="Local audio files are removed after seven days by default. You can change the period or clear them sooner. The Immediately option removes successful and failed recordings as soon as their result is recorded, so failed dictations cannot be retried."
           />
           <FAQItem
             question="Which AI providers work?"
-            answer="Add your own key and base URL for an OpenAI-compatible provider. You can also point the app at a compatible service running locally."
+            answer="Dictation supports ElevenLabs, Groq, OpenRouter, OpenAI, and compatible custom endpoints, with provider, model, and language controls. Cmd + E can use OpenRouter, Groq, OpenAI, or a custom endpoint independently."
+          />
+          <FAQItem
+            question="Does it work offline?"
+            answer="Read-aloud and local actions can work offline. Dictation and provider-backed actions need the configured provider unless you run a compatible service on your Mac."
           />
           <FAQItem
             question="Can I change Cmd + E?"
-            answer="Yes. Rebind the shortcut and choose or edit the actions it opens."
+            answer="Yes. Rebind the shortcut and choose or edit its actions. Provider-backed results stay available to preview, copy, cancel, or apply."
           />
           <FAQItem
             question="Can I change the source?"

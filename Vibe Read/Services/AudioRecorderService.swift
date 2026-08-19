@@ -22,11 +22,15 @@ class AudioRecorderService: NSObject, ObservableObject {
     private var detectedSampleRate: Double = 44100  // Will be updated from actual device
 
     private let captureQueue = DispatchQueue(label: "com.viberead.audio.capture")
+    private let transientRecordingDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("VibeRead", isDirectory: true)
+        .appendingPathComponent("Recordings", isDirectory: true)
 
     override init() {
         super.init()
         // Only check status on init, don't request permission
         updatePermissionStatus()
+        cleanupStaleTransientRecordings()
     }
 
     /// Updates the permission status without triggering a request
@@ -260,10 +264,14 @@ class AudioRecorderService: NSObject, ObservableObject {
         let url: URL
         let writer: AVAssetWriter
         let writerInput: AVAssetWriterInput
+        try FileManager.default.createDirectory(
+            at: transientRecordingDirectory,
+            withIntermediateDirectories: true
+        )
 
         if isBluetooth {
             // Use WAV format for Bluetooth - more compatible with 16-bit LPCM input
-            url = FileManager.default.temporaryDirectory
+            url = transientRecordingDirectory
                 .appendingPathComponent("dictation_\(UUID().uuidString).wav")
             writer = try AVAssetWriter(url: url, fileType: .wav)
 
@@ -282,7 +290,7 @@ class AudioRecorderService: NSObject, ObservableObject {
             writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
         } else {
             // Use AAC for non-Bluetooth devices (smaller files)
-            url = FileManager.default.temporaryDirectory
+            url = transientRecordingDirectory
                 .appendingPathComponent("dictation_\(UUID().uuidString).m4a")
             writer = try AVAssetWriter(url: url, fileType: .m4a)
 
@@ -331,6 +339,30 @@ class AudioRecorderService: NSObject, ObservableObject {
 
         print("[AudioRecorder] Started recording (Bluetooth: \(isBluetoothDevice(device)))")
         return url
+    }
+
+    /// Crash leftovers have no history row and cannot be retried. Keep them in
+    /// an app-owned temporary directory and remove only files that have aged
+    /// past the same seven-day ceiling used by the default audio policy.
+    private func cleanupStaleTransientRecordings() {
+        let fileManager = FileManager.default
+        let cutoff = Date().addingTimeInterval(-7 * 24 * 60 * 60)
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: transientRecordingDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        for file in files {
+            guard let values = try? file.resourceValues(
+                forKeys: [.contentModificationDateKey, .isRegularFileKey]
+            ),
+            values.isRegularFile == true,
+            (values.contentModificationDate ?? .distantPast) <= cutoff else {
+                continue
+            }
+            try? fileManager.removeItem(at: file)
+        }
     }
 
     func stopRecording() -> URL? {

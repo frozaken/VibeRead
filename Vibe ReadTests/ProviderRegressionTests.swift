@@ -762,6 +762,53 @@ struct ProviderRegressionTests {
         #expect(fixture.secrets.reads.isEmpty)
     }
 
+    @Test @MainActor func environmentFileStaysTheCredentialSourceWithoutKeychainAccess() throws {
+        let fixture = SettingsFixture()
+        defer { fixture.cleanup() }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VibeReadEnvironmentTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent(".env.local")
+        try "ELEVENLABS_API_KEY=first-local-value\n"
+            .write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let settings = fixture.makeSettings()
+        try settings.useEnvironmentFile(fileURL, for: .elevenLabs)
+
+        #expect(fixture.secrets.reads.isEmpty)
+        #expect(fixture.secrets.writes.isEmpty)
+        #expect(settings.environmentFileURL(for: .elevenLabs) == fileURL)
+        #expect(settings.environmentFileDisplayName(for: .elevenLabs) == ".env.local")
+        #expect(!settings.needsDictationSetup)
+
+        guard case .elevenLabs(let first) = try settings.dictationConfiguration() else {
+            Issue.record("Expected ElevenLabs configuration")
+            return
+        }
+        #expect(first.apiKey == "first-local-value")
+        #expect(fixture.secrets.reads.isEmpty)
+
+        try "ELEVENLABS_API_KEY=updated-local-value\n"
+            .write(to: fileURL, atomically: true, encoding: .utf8)
+        guard case .elevenLabs(let updated) = try settings.dictationConfiguration() else {
+            Issue.record("Expected updated ElevenLabs configuration")
+            return
+        }
+        #expect(updated.apiKey == "updated-local-value")
+        #expect(fixture.secrets.reads.isEmpty)
+        #expect(fixture.secrets.writes.isEmpty)
+
+        try settings.clearAPIKey(for: .elevenLabs)
+        #expect(fixture.secrets.deletes.isEmpty)
+        #expect(settings.environmentFileURL(for: .elevenLabs) == nil)
+        #expect(settings.needsDictationSetup)
+        #expect(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
     @Test @MainActor func unmarkedBlankConfigurationIsMissingWithoutReadingSecrets() {
         let fixture = SettingsFixture()
         defer { fixture.cleanup() }
@@ -902,6 +949,22 @@ struct ProviderRegressionTests {
         }
         #expect(fixture.secrets.reads.isEmpty)
         #expect(fixture.secrets.writes.isEmpty)
+    }
+
+    @Test @MainActor func previousBuildKeyIsReadOnlyAfterExplicitRecovery() throws {
+        let fixture = SettingsFixture()
+        defer { fixture.cleanup() }
+        fixture.previousSecrets.values["elevenlabs_api_key"] = "existing-eleven-key"
+        let settings = fixture.makeSettings()
+
+        #expect(fixture.previousSecrets.reads.isEmpty)
+        try settings.recoverPreviousAPIKey(for: .elevenLabs)
+
+        #expect(fixture.previousSecrets.reads == ["elevenlabs_api_key"])
+        #expect(fixture.secrets.writes.count == 1)
+        #expect(fixture.secrets.writes.first?.account == "elevenlabs_api_key")
+        #expect(fixture.secrets.writes.first?.value == "existing-eleven-key")
+        #expect(settings.credentialStatus(for: .elevenLabs) == .configured)
     }
 
     @Test @MainActor func URLValidationAllowsHTTPSAndLoopbackOnly() throws {
@@ -1076,6 +1139,7 @@ private final class SettingsFixture {
     let suiteName = "VibeReadProviderTests.\(UUID().uuidString)"
     let defaults: UserDefaults
     let secrets = SyntheticSecretStore()
+    let previousSecrets = SyntheticSecretStore()
 
     init() {
         defaults = UserDefaults(suiteName: suiteName)!
@@ -1086,6 +1150,9 @@ private final class SettingsFixture {
         AIProviderSettings(
             defaults: defaults,
             readSecret: { [secrets] account in try secrets.read(account) },
+            readPreviousSecret: { [previousSecrets] account in
+                try previousSecrets.read(account)
+            },
             writeSecret: { [secrets] value, account in try secrets.write(value, account: account) },
             deleteSecret: { [secrets] account in try secrets.delete(account) }
         )

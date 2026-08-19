@@ -24,15 +24,19 @@ a report. Use synthetic samples and redact logs.
 
 ## Security model
 
-- Provider API keys are stored in macOS Keychain, not in source code,
+- Provider API keys can stay in a user-selected `.env` file. If a key is
+  pasted or recovered, it is stored in macOS Keychain, not in source code,
   preferences, or the transcript database. Groq, OpenRouter, and OpenAI each
   use one item across dictation and Cmd + E. ElevenLabs uses a dictation-only
   item. Custom dictation and custom text use separate items.
 - Launching Vibe Read and opening Settings do not read Keychain. The app reads
   a saved key only after explicit verification or intentional provider use.
   A loaded key is cached in process memory until the app quits.
+- Previous-build recovery explicitly disables authentication UI. Using a
+  `.env` file remembers its path and reads only the selected provider variable.
+  The key is not copied into Keychain and the app never scans for credential files.
 - Generic provider keys created by older builds are not automatically
-  discovered or migrated. Users must re-enter them for the intended provider.
+  discovered or migrated.
 - Vibe Read does not request system access at startup. macOS prompts only after
   the user clicks Grant Access or intentionally uses a feature that needs the
   permission.

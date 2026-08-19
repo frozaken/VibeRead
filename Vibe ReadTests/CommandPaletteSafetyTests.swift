@@ -3,6 +3,44 @@ import Testing
 @testable import Vibe_Read
 
 struct CommandPaletteSafetyTests {
+    @Test func secondFnTransitionFinishesHandsFreeDictation() {
+        #expect(
+            KeyboardShortcutService.shouldFinishHandsFree(
+                isHandsFreeRecording: true,
+                shortcutAction: .handsFree
+            )
+        )
+        #expect(
+            !KeyboardShortcutService.shouldFinishHandsFree(
+                isHandsFreeRecording: false,
+                shortcutAction: .handsFree
+            )
+        )
+        #expect(
+            !KeyboardShortcutService.shouldFinishHandsFree(
+                isHandsFreeRecording: true,
+                shortcutAction: .pushToTalk
+            )
+        )
+    }
+
+    @Test func fnReleaseDoesNotSendASecondStopAfterPressHandledIt() {
+        #expect(
+            !KeyboardShortcutService.shouldFinishHandsFreeOnRelease(
+                isHandsFreeRecording: true,
+                shortcutAction: .handsFree,
+                didTriggerOnPress: true
+            )
+        )
+        #expect(
+            KeyboardShortcutService.shouldFinishHandsFreeOnRelease(
+                isHandsFreeRecording: true,
+                shortcutAction: .handsFree,
+                didTriggerOnPress: false
+            )
+        )
+    }
+
     @Test func commandChordRoutesThroughCarbon() {
         let representation = KeyboardShortcutService.carbonRepresentation(
             for: [.command, .e]

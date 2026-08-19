@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 private enum ProviderSaveResult {
     case success(String)
@@ -24,6 +25,7 @@ private struct ProviderCredentialStatusLabel: View {
     let result: ProviderSaveResult?
     let status: ProviderCredentialStatus
     let allowsEmptyKey: Bool
+    let environmentFileName: String?
 
     var body: some View {
         Group {
@@ -38,8 +40,10 @@ private struct ProviderCredentialStatusLabel: View {
                 switch status {
                 case .configured:
                     Label(
-                        "API key saved for this build. It is read only when you verify or use this provider.",
-                        systemImage: "checkmark.circle"
+                        environmentFileName.map {
+                            "Using \($0). The key is read only when you use this provider."
+                        } ?? "API key saved. It is read only when you verify or use this provider.",
+                        systemImage: environmentFileName == nil ? "checkmark.circle" : "doc.badge.checkmark"
                     )
                     .foregroundColor(.secondary)
                 case .missing:
@@ -136,6 +140,8 @@ struct ProviderConfigurationSettingsView: View {
                     saveOnly: dictationProvider == .elevenLabs,
                     isVerifying: isVerifyingDictation,
                     saveAction: saveAndVerifyDictation,
+                    importAction: importDictationKey,
+                    recoverAction: recoverPreviousDictationKey,
                     removeAction: removeDictationKey
                 )
             }
@@ -176,12 +182,14 @@ struct ProviderConfigurationSettingsView: View {
                     allowsEmptyKey: textAllowsEmptyKey,
                     isVerifying: isVerifyingText,
                     saveAction: saveAndVerifyText,
+                    importAction: importTextKey,
+                    recoverAction: recoverPreviousTextKey,
                     removeAction: removeTextKey
                 )
             }
 
             Label(
-                "Keys stay in macOS Keychain. Rebuilt apps ask you to save the key once for their new local identity. Audio and text then go directly to the providers you choose. Vibe Read has no relay or cloud database.",
+                "Paste a key to store it in macOS Keychain, or choose a .env file and keep the key there. Previous-build recovery never allows a password prompt. Audio and text go directly to the providers you choose. Vibe Read has no relay or cloud database.",
                 systemImage: "hand.raised.fill"
             )
             .font(.caption)
@@ -299,12 +307,15 @@ struct ProviderConfigurationSettingsView: View {
         saveOnly: Bool = false,
         isVerifying: Bool,
         saveAction: @escaping () -> Void,
+        importAction: @escaping () -> Void,
+        recoverAction: @escaping () -> Void,
         removeAction: @escaping () -> Void
     ) -> some View {
         ProviderCredentialStatusLabel(
             result: result,
             status: settings.credentialStatus(for: credential),
-            allowsEmptyKey: allowsEmptyKey
+            allowsEmptyKey: allowsEmptyKey,
+            environmentFileName: settings.environmentFileDisplayName(for: credential)
         )
 
         SecureField(
@@ -336,8 +347,13 @@ struct ProviderConfigurationSettingsView: View {
             if isVerifying {
                 ProgressView().controlSize(.small)
             }
+            Menu("Use Existing Key") {
+                Button("Use .env File", action: importAction)
+                Button("Recover from Previous Vibe Read", action: recoverAction)
+            }
+            .disabled(isVerifying)
             if let keyURL = apiKeyURL(for: credential) {
-                Link("Create API key", destination: keyURL)
+                Link("Get API key", destination: keyURL)
                     .font(.caption)
             }
             Spacer()
@@ -349,7 +365,7 @@ struct ProviderConfigurationSettingsView: View {
 
         Text(
             saveOnly
-                ? "Opening Settings never reads Keychain. Saving does not contact ElevenLabs. Your first dictation sends audio directly to Scribe v2 and is the end-to-end test."
+                ? "Paste a key, use a local .env file, or recover the previous build. Setup does not contact ElevenLabs. Your first dictation sends audio directly to Scribe v2 and is the end-to-end test."
                 : "Opening Settings never reads Keychain. Save & Verify checks only this provider and does not upload audio or selected text. It also checks the selected model when the provider exposes an applicable model list. The selected model is exercised only when you use the feature."
         )
             .font(.caption)
@@ -663,6 +679,78 @@ struct ProviderConfigurationSettingsView: View {
         } catch {
             textResult = .failure(error.localizedDescription)
         }
+    }
+
+    private func importDictationKey() {
+        do {
+            let credential = dictationProvider.credential
+            guard let fileURL = chooseEnvironmentFile(for: credential) else { return }
+            try settings.useEnvironmentFile(fileURL, for: credential)
+            settings.dictationProvider = dictationProvider
+            settings.dictationLanguage = dictationLanguage
+            settings.selectedDictationModel = dictationModel
+            settings.customDictationBaseURL = dictationBaseURL
+            dictationKey = ""
+            dictationResult = .success(
+                "Using \(fileURL.lastPathComponent). You do not need a new key."
+            )
+        } catch {
+            dictationResult = .failure(error.localizedDescription)
+        }
+    }
+
+    private func importTextKey() {
+        do {
+            let credential = textProvider.credential
+            guard let fileURL = chooseEnvironmentFile(for: credential) else { return }
+            try settings.useEnvironmentFile(fileURL, for: credential)
+            settings.textActionProvider = textProvider
+            settings.selectedTextActionModel = textModel
+            settings.customTextBaseURL = textBaseURL
+            textKey = ""
+            textResult = .success(
+                "Using \(fileURL.lastPathComponent). You do not need a new key."
+            )
+        } catch {
+            textResult = .failure(error.localizedDescription)
+        }
+    }
+
+    private func recoverPreviousDictationKey() {
+        do {
+            try settings.recoverPreviousAPIKey(for: dictationProvider.credential)
+            settings.dictationProvider = dictationProvider
+            dictationResult = .success("Recovered your existing key from the previous build.")
+        } catch {
+            dictationResult = .failure(previousKeyRecoveryMessage(for: error))
+        }
+    }
+
+    private func recoverPreviousTextKey() {
+        do {
+            try settings.recoverPreviousAPIKey(for: textProvider.credential)
+            settings.textActionProvider = textProvider
+            textResult = .success("Recovered your existing key from the previous build.")
+        } catch {
+            textResult = .failure(previousKeyRecoveryMessage(for: error))
+        }
+    }
+
+    private func chooseEnvironmentFile(for credential: ProviderCredential) -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a Local .env File"
+        panel.message = "Vibe Read reads only \(credential.environmentVariableName) from the file you choose."
+        panel.prompt = "Use This File"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.showsHiddenFiles = true
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
+    private func previousKeyRecoveryMessage(for error: Error) -> String {
+        "The previous build did not provide this key without a password prompt. No prompt was shown. Use your existing .env file or paste the key instead. \(error.localizedDescription)"
     }
 
     private func apiKeyURL(for credential: ProviderCredential) -> URL? {

@@ -40,10 +40,6 @@ struct OverlayMenuView: View {
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.primary.opacity(0.1), lineWidth: 1)
-        )
         .focusable()
         .modifier(OverlayKeyboardNavigation(
             onUp: { move(by: -1) },
@@ -197,14 +193,14 @@ struct OverlayMenuView: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "accessibility")
                     .foregroundColor(.orange)
-                Text("Selection, fn shortcuts, and Apply need Accessibility access. Cmd+E and clipboard actions still work.")
+                Text("Turn on Vibe Read in System Settings for selection, Fn shortcuts, and Apply. Cmd+E and clipboard actions still work.")
                     .font(.caption2)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             HStack(spacing: 10) {
-                Button("Grant Access") {
+                Button("Request Accessibility") {
                     accessibility.requestAccessibilityPermission()
                 }
                 Button("Open Settings") {

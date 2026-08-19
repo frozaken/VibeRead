@@ -56,6 +56,7 @@ class KeyboardShortcutService: ObservableObject {
     private var isPushToTalkActive = false
     private var lastFnState = false
     private var fnAloneCandidate = false
+    private var fnHandsFreeStopTriggeredOnPress = false
     private var activePushToTalkShortcut: CustomKeyboardShortcut?
     private var activeOneShotShortcutID: UUID?
 
@@ -80,6 +81,7 @@ class KeyboardShortcutService: ObservableObject {
                 self.activeCarbonOneShotID = nil
                 self.activeOneShotShortcutID = nil
                 self.fnAloneCandidate = false
+                self.fnHandsFreeStopTriggeredOnPress = false
                 self.registerCarbonHotKeys()
             }
             .store(in: &cancellables)
@@ -408,13 +410,16 @@ class KeyboardShortcutService: ObservableObject {
 
             if fnPressed {
                 currentlyPressedKeys.insert(.fn)
-                if DictationService.shared.isHandsFreeRecording,
-                   let shortcut = findMatchingShortcut(for: [.fn]),
-                   shortcut.action == .handsFree {
+                let fnShortcut = findMatchingShortcut(for: [.fn])
+                if Self.shouldFinishHandsFree(
+                    isHandsFreeRecording: DictationService.shared.isHandsFreeRecording,
+                    shortcutAction: fnShortcut?.action
+                ), let shortcut = fnShortcut {
                     // A second fn press finishes hands-free recording on
                     // key-down. Some macOS configurations do not reliably
                     // deliver the matching global key-up while recording.
                     fnAloneCandidate = false
+                    fnHandsFreeStopTriggeredOnPress = true
                     DispatchQueue.main.async {
                         self.onShortcutTriggered?(shortcut.action)
                     }
@@ -422,6 +427,7 @@ class KeyboardShortcutService: ObservableObject {
                     // Wait for release before treating the first fn press as
                     // an fn-alone action. This leaves time for fn+Space.
                     fnAloneCandidate = true
+                    fnHandsFreeStopTriggeredOnPress = false
                 }
             } else {
                 // fn released
@@ -430,9 +436,14 @@ class KeyboardShortcutService: ObservableObject {
                 // End push-to-talk if active
                 if isPushToTalkActive {
                     endPushToTalk()
-                } else if DictationService.shared.isHandsFreeRecording,
-                          let shortcut = findMatchingShortcut(for: [.fn]),
-                          shortcut.action == .handsFree {
+                } else if fnHandsFreeStopTriggeredOnPress {
+                    // Key-down already sent the stop action. Do not send it
+                    // again if recording state has not updated before key-up.
+                } else if Self.shouldFinishHandsFreeOnRelease(
+                    isHandsFreeRecording: DictationService.shared.isHandsFreeRecording,
+                    shortcutAction: findMatchingShortcut(for: [.fn])?.action,
+                    didTriggerOnPress: fnHandsFreeStopTriggeredOnPress
+                ), let shortcut = findMatchingShortcut(for: [.fn]) {
                     // Also finish on the second release. This catches the
                     // macOS path where a modifier-down transition is
                     // coalesced while the nonactivating HUD is visible.
@@ -450,6 +461,7 @@ class KeyboardShortcutService: ObservableObject {
                 }
 
                 fnAloneCandidate = false
+                fnHandsFreeStopTriggeredOnPress = false
             }
         }
 
@@ -471,6 +483,24 @@ class KeyboardShortcutService: ObservableObject {
             activate(shortcut)
         }
         endPushToTalkIfShortcutNoLongerPressed()
+    }
+
+    static func shouldFinishHandsFree(
+        isHandsFreeRecording: Bool,
+        shortcutAction: ShortcutAction?
+    ) -> Bool {
+        isHandsFreeRecording && shortcutAction == .handsFree
+    }
+
+    static func shouldFinishHandsFreeOnRelease(
+        isHandsFreeRecording: Bool,
+        shortcutAction: ShortcutAction?,
+        didTriggerOnPress: Bool
+    ) -> Bool {
+        !didTriggerOnPress && shouldFinishHandsFree(
+            isHandsFreeRecording: isHandsFreeRecording,
+            shortcutAction: shortcutAction
+        )
     }
 
     // MARK: - Key Down

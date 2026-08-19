@@ -40,6 +40,17 @@ enum ProviderCredential: String, CaseIterable, Identifiable, Sendable {
         case .customText: return "custom_text_action_api_key"
         }
     }
+
+    var environmentVariableName: String {
+        switch self {
+        case .elevenLabs: return "ELEVENLABS_API_KEY"
+        case .groq: return "GROQ_API_KEY"
+        case .openRouter: return "OPENROUTER_API_KEY"
+        case .openAI: return "OPENAI_API_KEY"
+        case .customDictation: return "CUSTOM_DICTATION_API_KEY"
+        case .customText: return "CUSTOM_TEXT_ACTION_API_KEY"
+        }
+    }
 }
 
 enum ProviderCredentialStatus: Equatable, Sendable {
@@ -415,6 +426,9 @@ final class AIProviderSettings: ObservableObject {
         static func credentialConfigured(_ credential: ProviderCredential) -> String {
             "provider.v3.credential.\(credential.rawValue).configured"
         }
+        static func environmentFilePath(_ credential: ProviderCredential) -> String {
+            "provider.v3.credential.\(credential.rawValue).environmentFilePath"
+        }
     }
 
     private enum LegacyProviderKind: Equatable {
@@ -460,6 +474,7 @@ final class AIProviderSettings: ObservableObject {
 
     private let defaults: UserDefaults
     private let readSecret: SecretReader
+    private let readPreviousSecret: SecretReader
     private let writeSecret: SecretWriter
     private let deleteSecret: SecretDeleter
 
@@ -512,6 +527,9 @@ final class AIProviderSettings: ObservableObject {
     init(
         defaults: UserDefaults = .standard,
         readSecret: @escaping SecretReader = { try KeychainHelper.shared.read(key: $0) },
+        readPreviousSecret: @escaping SecretReader = {
+            try KeychainHelper.shared.readPreviousVersion(key: $0)
+        },
         writeSecret: @escaping SecretWriter = { value, account in
             try KeychainHelper.shared.save(token: value, for: account)
         },
@@ -519,6 +537,7 @@ final class AIProviderSettings: ObservableObject {
     ) {
         self.defaults = defaults
         self.readSecret = readSecret
+        self.readPreviousSecret = readPreviousSecret
         self.writeSecret = writeSecret
         self.deleteSecret = deleteSecret
 
@@ -678,6 +697,17 @@ final class AIProviderSettings: ObservableObject {
         credentialStatuses[credential] ?? .missing
     }
 
+    func environmentFileURL(for credential: ProviderCredential) -> URL? {
+        guard let path = Self.nonempty(
+            defaults.string(forKey: StorageKey.environmentFilePath(credential))
+        ) else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    func environmentFileDisplayName(for credential: ProviderCredential) -> String? {
+        environmentFileURL(for: credential)?.lastPathComponent
+    }
+
     /// Refreshes display state from nonsecret UserDefaults markers only.
     /// It deliberately never probes Keychain.
     func refreshCredentialStatuses() {
@@ -702,15 +732,47 @@ final class AIProviderSettings: ObservableObject {
         }
         try writeSecret(trimmed, credential.keychainAccount)
         cachedSecrets[credential] = trimmed
+        defaults.removeObject(forKey: StorageKey.environmentFilePath(credential))
+        defaults.set(true, forKey: StorageKey.credentialConfigured(credential))
+        credentialStatuses[credential] = .configured
+    }
+
+    /// Uses a user-selected local file as the credential source. The secret is
+    /// validated now but is never copied into UserDefaults or Keychain. Only
+    /// the file path is remembered, and the exact provider variable is read
+    /// again when that provider is intentionally used.
+    func useEnvironmentFile(_ fileURL: URL, for credential: ProviderCredential) throws {
+        _ = try EnvironmentKeyImporter.value(
+            named: credential.environmentVariableName,
+            in: fileURL
+        )
+        cachedSecrets.removeValue(forKey: credential)
+        defaults.set(
+            fileURL.standardizedFileURL.path,
+            forKey: StorageKey.environmentFilePath(credential)
+        )
         defaults.set(true, forKey: StorageKey.credentialConfigured(credential))
         credentialStatuses[credential] = .configured
     }
 
     func clearAPIKey(for credential: ProviderCredential) throws {
-        try deleteSecret(credential.keychainAccount)
+        if environmentFileURL(for: credential) == nil {
+            try deleteSecret(credential.keychainAccount)
+        }
         cachedSecrets.removeValue(forKey: credential)
+        defaults.removeObject(forKey: StorageKey.environmentFilePath(credential))
         defaults.removeObject(forKey: StorageKey.credentialConfigured(credential))
         credentialStatuses[credential] = .missing
+    }
+
+    /// User-initiated recovery from the immediately previous local build.
+    /// Keychain is not allowed to display authentication UI for this read.
+    func recoverPreviousAPIKey(for credential: ProviderCredential) throws {
+        guard let value = try readPreviousSecret(credential.keychainAccount),
+              Self.nonempty(value) != nil else {
+            throw ConfigurationError.missingAPIKey(credential)
+        }
+        try saveAPIKey(value, for: credential)
     }
 
     func dictationConfiguration() throws -> DictationProviderConfiguration {
@@ -971,6 +1033,20 @@ final class AIProviderSettings: ObservableObject {
     }
 
     private func storedSecret(for credential: ProviderCredential) throws -> String {
+        if let fileURL = environmentFileURL(for: credential) {
+            do {
+                return try EnvironmentKeyImporter.value(
+                    named: credential.environmentVariableName,
+                    in: fileURL
+                )
+            } catch {
+                credentialStatuses[credential] = .inaccessible(error.localizedDescription)
+                throw ConfigurationError.inaccessibleAPIKey(
+                    credential,
+                    "The selected .env file is unavailable. \(error.localizedDescription)"
+                )
+            }
+        }
         if let cached = cachedSecrets[credential] {
             return cached
         }

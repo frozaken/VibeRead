@@ -18,16 +18,24 @@ document describes the current app's data flow.
 - Shortcuts, provider choices, provider URL and model identifiers, dictation
   language, vocabulary, retention choice, and user-defined action prompts are
   stored in macOS preferences.
-- API keys are stored in macOS Keychain. Groq, OpenRouter, and OpenAI each use
-  one provider item that can power dictation and Cmd + E. ElevenLabs uses one
-  item for dictation and optional read-aloud. Custom dictation and custom text actions use separate
-  Keychain items.
+- API keys can remain in a user-selected `.env` file. Pasted or recovered keys
+  are stored in macOS Keychain. Groq, OpenRouter, and OpenAI each use one
+  provider credential that can power dictation and Cmd + E. ElevenLabs uses
+  one credential for dictation and optional read-aloud. Custom dictation and
+  custom text actions use separate credentials.
 
 Launching Vibe Read and opening Settings do not read Keychain. The app reads a
-saved provider key only after the user explicitly verifies it or intentionally
-uses that provider. A loaded key is cached in memory until the
-app quits. Older generic provider keys are not automatically discovered or
-migrated. Users must re-enter them for the provider they want to use.
+saved Keychain item only after the user explicitly verifies it or intentionally
+uses that provider. A Keychain key is cached in memory until the app quits. A
+selected `.env` value is read from that file when used. Older generic provider keys are not automatically discovered or
+migrated.
+
+Credential setup is always user initiated. **Use Existing Key** can remember a
+`.env` file the user selects and read only one named provider variable when the
+provider is used, or attempt a
+noninteractive read from the previous Vibe Read build. Recovery is forbidden
+from displaying a macOS password prompt. A `.env` key is not copied into
+Keychain. Vibe Read does not scan the disk for environment files.
 
 The database and recordings are not application-level encrypted. macOS account
 security restricts access, and users can enable FileVault for encryption at

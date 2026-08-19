@@ -11,6 +11,11 @@ For the normal ElevenLabs setup, open Vibe Read, paste the key under
 **Settings > Providers**, click **Save Key**, and close Settings. Press **Fn**
 once to start dictating and press **Fn** again to send. Nothing else is needed.
 
+An existing key does not need to be recreated. **Use Existing Key** can use
+`ELEVENLABS_API_KEY` from a chosen `.env` file without copying the key into
+Keychain, or explicitly recover the key from the previous Vibe Read build.
+Recovery is noninteractive and never opens a macOS password prompt.
+
 The other provider and model controls are optional. They exist for people who
 want Groq, OpenRouter, OpenAI, or a compatible service running locally.
 
@@ -21,18 +26,18 @@ Dictation and Cmd + E are configured independently.
 | Dictation | ElevenLabs, Groq, OpenRouter, OpenAI, Custom OpenAI-compatible | Provider, transcription model where supported, and language or auto detect |
 | Cmd + E and custom dictation cleanup | OpenRouter, Groq, OpenAI, Custom OpenAI-compatible | Provider and text model |
 
-Vibe Read stores one API key for each built-in provider in macOS Keychain. If
-Groq, OpenRouter, or OpenAI is selected for both dictation and Cmd + E, both
-features use that provider's saved key. ElevenLabs can power both Scribe
+Each provider credential can stay in a user-selected `.env` file or be saved
+in macOS Keychain. If Groq, OpenRouter, or OpenAI is selected for both dictation
+and Cmd + E, both features use that provider's credential. ElevenLabs can power both Scribe
 dictation and optional ElevenLabs read-aloud. Custom
-dictation and custom text actions have separate endpoint URLs and Keychain
-items. Provider choices, model identifiers, language, and custom endpoint URLs
+dictation and custom text actions have separate endpoint URLs and credentials.
+Provider choices, model identifiers, language, `.env` file paths, and custom endpoint URLs
 are non-secret preferences stored by macOS.
 
-Launching Vibe Read and opening Settings do not read Keychain. The app reads a
-saved key only after the user explicitly verifies it or intentionally uses that
-provider for dictation, cleanup, or a text action. After a key is loaded,
-the app caches it in memory until the app quits. Older generic provider keys
+Launching Vibe Read and opening Settings do not read Keychain or a selected
+`.env` file. The app reads a credential only after the user explicitly verifies
+it or intentionally uses that provider for dictation, cleanup, or a text action.
+Keychain values are cached in memory until the app quits. Older generic provider keys
 are not automatically discovered or migrated. Users must re-enter an older key
 for the provider they want to use and choose its explicit save action.
 

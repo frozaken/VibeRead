@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import LocalAuthentication
 
 enum KeychainError: LocalizedError {
     case couldNotEncodeSecret
@@ -36,6 +37,10 @@ final class KeychainHelper {
         "\(Bundle.main.bundleIdentifier ?? "VibeRead").local-provider-secrets.v3"
     }
 
+    private var previousService: String {
+        "\(Bundle.main.bundleIdentifier ?? "VibeRead").local-provider-secrets.v2"
+    }
+
     private init() {}
 
     func save(token: String, for key: String) throws {
@@ -46,7 +51,8 @@ final class KeychainHelper {
         let lookup: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key
+            kSecAttrAccount as String: key,
+            kSecUseAuthenticationContext as String: noninteractiveContext()
         ]
 
         let update: [String: Any] = [
@@ -60,6 +66,7 @@ final class KeychainHelper {
         }
 
         var insertion = lookup
+        insertion.removeValue(forKey: kSecUseAuthenticationContext as String)
         insertion[kSecValueData as String] = data
         insertion[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let addStatus = SecItemAdd(insertion as CFDictionary, nil)
@@ -69,11 +76,23 @@ final class KeychainHelper {
     }
 
     func read(key: String) throws -> String? {
+        try read(key: key, service: service)
+    }
+
+    /// Explicit recovery for the immediately previous local build. The query
+    /// is forbidden from displaying authentication UI. It either succeeds
+    /// silently or returns an actionable error to the app.
+    func readPreviousVersion(key: String) throws -> String? {
+        try read(key: key, service: previousService)
+    }
+
+    private func read(key: String, service: String) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
-            kSecReturnData as String: true
+            kSecReturnData as String: true,
+            kSecUseAuthenticationContext as String: noninteractiveContext()
         ]
 
         var result: AnyObject?
@@ -99,12 +118,19 @@ final class KeychainHelper {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key
+            kSecAttrAccount as String: key,
+            kSecUseAuthenticationContext as String: noninteractiveContext()
         ]
 
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.operationFailed(status)
         }
+    }
+
+    private func noninteractiveContext() -> LAContext {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        return context
     }
 }

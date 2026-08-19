@@ -93,7 +93,7 @@ private struct LocalGeneralSettings: View {
 
                 if !accessibility.hasAccessibilityPermission {
                     HStack {
-                        Button("Grant Access") {
+                        Button("Request Accessibility") {
                             accessibility.requestAccessibilityPermission()
                         }
                         Button("Open System Settings") {
@@ -106,7 +106,7 @@ private struct LocalGeneralSettings: View {
                     }
                 }
 
-                Text("Ordinary global shortcuts such as Cmd + E work without Accessibility. The app asks only for the features that need it.")
+                Text("Choose Request Accessibility once, then turn on Vibe Read in the macOS prompt. This is required for Fn shortcuts and pasting into other apps. Ordinary shortcuts such as Cmd + E work without it.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

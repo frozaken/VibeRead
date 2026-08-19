@@ -47,14 +47,16 @@ Vibe Read has no account system or operated server in the request path. The sour
 Once the app is installed, setup takes about a minute.
 
 1. Open Vibe Read.
-2. In **Providers**, leave **ElevenLabs** selected and paste your ElevenLabs API key.
-3. Click **Save Key**, then close Settings.
+2. In **Providers**, leave **ElevenLabs** selected. Paste your existing key, or choose **Use Existing Key > Use .env File** and select a file containing `ELEVENLABS_API_KEY`.
+3. If you pasted the key, click **Save Key**. Then close Settings.
 4. The first time macOS asks, allow **Microphone** and **Accessibility** access for Vibe Read.
 5. Press **Fn** once to start dictating. Press **Fn** again to stop, transcribe, and paste.
 
 That is all you need for dictation. Cmd + E text actions are optional and can be configured later with Groq, OpenRouter, OpenAI, or a compatible local service.
 
-Vibe Read never needs your Mac login password. The API key is entered only inside Vibe Read. If an older source build shows a password dialog for an old Vibe Read Keychain item, deny it and install the latest build.
+You do not need to create a new key for each build. With **Use .env File**, Vibe Read remembers the selected file path and reads only `ELEVENLABS_API_KEY` when you dictate. It does not copy that key into Keychain. You can also paste the existing key into Keychain or explicitly recover a key from the previous Vibe Read build. Recovery never displays a macOS password prompt.
+
+Vibe Read never needs your Mac login password. If an older source build shows a password dialog for an old Vibe Read Keychain item, deny it and install the latest build.
 
 ## Build from source
 
@@ -94,14 +96,14 @@ If you hand this repository to Codex or another coding agent, ask it to build th
 
 Open Settings and choose Providers.
 
-Dictation and Cmd + E have separate provider and model choices. A saved Groq,
-OpenRouter, or OpenAI key is reused if both features select that provider.
+Dictation and Cmd + E have separate provider and model choices. A configured
+Groq, OpenRouter, or OpenAI key is reused if both features select that provider.
 ElevenLabs powers dictation and optional read-aloud. Custom dictation and
-custom text actions have separate URLs and Keychain entries.
+custom text actions have separate URLs and credentials.
 
-Launching Vibe Read and opening Settings do not read Keychain. Vibe Read reads
-a saved provider key only after you explicitly verify it or intentionally use
-a provider-backed feature. A key loaded from Keychain is
+Launching Vibe Read and opening Settings do not read Keychain or a selected
+`.env` file. Vibe Read reads a provider credential only after you explicitly
+verify it or intentionally use a provider-backed feature. A key loaded from Keychain is
 cached in memory until you quit the app, so later requests to that provider in
 the same run do not read it again.
 
@@ -162,7 +164,7 @@ Vibe Read stores its own data on your Mac. Provider requests go directly from th
 | --- | --- |
 | Transcript history | Local SQLite until you delete it |
 | Audio kept for retry | Local files removed after seven days by default |
-| Provider API keys | macOS Keychain. Groq, OpenRouter, and OpenAI can be shared between compatible features. ElevenLabs can power dictation and read-aloud. Custom dictation and custom text use separate items. |
+| Provider API keys | A `.env` file you choose, or macOS Keychain when you paste or recover a key. Groq, OpenRouter, and OpenAI can be shared between compatible features. ElevenLabs can power dictation and read-aloud. Custom dictation and custom text remain separate. |
 | Dictation audio | Your configured provider when you transcribe |
 | Text used by an action | Your configured provider when you run that action |
 | Transcript cleanup text | Your configured text provider only when a custom cleanup mode is enabled |

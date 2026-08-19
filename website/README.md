@@ -7,12 +7,14 @@ actions.
 ## App setup
 
 1. Open Vibe Read.
-2. Open Providers and paste an ElevenLabs API key.
-3. Click Save Key.
+2. Open Providers and paste an ElevenLabs API key, or choose an existing `.env` file.
+3. Click Save Key only if you pasted the key.
 4. Allow Microphone and Accessibility when macOS asks.
 5. Press Fn once to start dictation and Fn again to send.
 
 No Vibe Read account, subscription, database, or server setup is required.
+An existing key can stay in a chosen `.env` file. A new key is not required for
+each build.
 
 ## Static only
 
@@ -56,15 +58,15 @@ separate OpenRouter, Groq, OpenAI, or custom provider. Remote providers receive
 audio or text only when the user asks them to process it, and each provider
 applies its own terms and retention policy.
 
-Provider keys are stored in macOS Keychain. Groq, OpenRouter, and OpenAI can
+Provider keys can stay in a chosen `.env` file or be stored in macOS Keychain. Groq, OpenRouter, and OpenAI can
 each use one key across dictation and Cmd + E. ElevenLabs is dictation-only.
 Custom dictation and custom text use separate keys and endpoint URLs. Keys are
 never part of this static website. Users can also configure a compatible
 service running on their Mac.
 
-Launching Vibe Read and opening Settings do not read Keychain. The app reads a
-saved key only after explicit verification or intentional provider use, then
-caches it in memory until the app quits. Generic keys from older builds are not
+Launching Vibe Read and opening Settings do not read Keychain or a selected
+`.env` file. The app reads a credential only after explicit verification or
+intentional provider use. Keychain values are cached in memory until the app quits. Generic keys from older builds are not
 automatically discovered or migrated. Users must re-enter them for the provider
 they want to use.
 

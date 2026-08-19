@@ -89,14 +89,19 @@ and OpenAI, while MP4 is rejected for OpenRouter. Vibe Read reports the format
 before sending a request and leaves the original local file unchanged.
 
 Earlier builds could store one generic provider key in Keychain. Vibe Read does
-not automatically discover, read, or migrate that item. Re-enter the key for
-the provider or custom connection you want to use and choose its save action.
-This release uses a new versioned Keychain namespace. The new value is stored
-in that connection's dedicated item.
+not automatically discover or read that item. **Use Existing Key** can recover
+the immediately previous Vibe Read key without allowing a password prompt, or
+use the named provider variable from a `.env` file selected by the user. The
+app remembers only the file path and does not copy that key into Keychain. This
+release uses a new versioned Keychain namespace only for pasted or recovered keys.
 
 Launching Vibe Read and opening Settings do not read Keychain. A saved key is
 read only after explicit verification or an intentional provider request. Once
 loaded, it is cached in memory until the app quits.
+
+Vibe Read never searches for `.env` files. It reads only the provider variable
+named in the picker, first to validate the selected file and later when that
+provider is intentionally used.
 
 This migration covers data already present on the Mac only. It does not connect
 to or import from the former hosted database. Anyone who used a hosted Vibe Read

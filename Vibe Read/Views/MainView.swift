@@ -71,14 +71,19 @@ struct MainView: View {
                 }
                 .padding(.trailing, AppTheme.Dimensions.contentPadding)
             }
-            .padding(.vertical, AppTheme.Dimensions.contentPadding)
+            .padding(.top, AppTheme.Dimensions.titlebarHeight)
+            .padding(.bottom, AppTheme.Dimensions.contentPadding)
 
             ConfettiView(isActive: $showConfetti)
+
+            TitlebarSidebarToggle(isCollapsed: $isSidebarCollapsed)
+                .padding(.leading, 78)
+                .padding(.top, 4)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .tint(AppTheme.Colors.brandAccent)
         .background(AppTheme.Colors.sidebarBackground)
-        .background(WindowChromeConfigurator(isSidebarCollapsed: $isSidebarCollapsed))
-        .toolbarBackground(AppTheme.Colors.sidebarBackground, for: .windowToolbar)
+        .ignoresSafeArea(.container, edges: .top)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSidebarCollapsed)
         .sheet(isPresented: $showingSettings) {
             SettingsView(startsOnProvider: settingsStartsOnProvider)
@@ -158,7 +163,6 @@ private struct LocalSidebarView: View {
             }
             .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
             .padding(.horizontal, isCollapsed ? 0 : 16)
-            .padding(.top, 8)
             .padding(.bottom, 18)
 
             VStack(spacing: 4) {
@@ -185,7 +189,6 @@ private struct LocalSidebarView: View {
                 action: onOpenSettings
             )
             .padding(.horizontal, isCollapsed ? 12 : 10)
-            .padding(.bottom, 16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppTheme.Colors.sidebarBackground)
@@ -224,117 +227,28 @@ private struct LocalSidebarView: View {
     }
 }
 
-private struct WindowChromeConfigurator: NSViewRepresentable {
-    @Binding var isSidebarCollapsed: Bool
+private struct TitlebarSidebarToggle: View {
+    @Binding var isCollapsed: Bool
+    @State private var isHovered = false
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(isSidebarCollapsed: $isSidebarCollapsed)
-    }
-
-    func makeNSView(context: Context) -> WindowAttachmentView {
-        let view = WindowAttachmentView()
-        view.onWindowChange = { window in
-            context.coordinator.install(in: window)
+    var body: some View {
+        Button {
+            isCollapsed.toggle()
+        } label: {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(isHovered ? Color.primary : Color.secondary)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(isHovered ? Color.primary.opacity(0.07) : Color.clear)
+                }
         }
-        return view
-    }
-
-    func updateNSView(_ nsView: WindowAttachmentView, context: Context) {
-        context.coordinator.isSidebarCollapsed = $isSidebarCollapsed
-        context.coordinator.updateButton()
-        if let window = nsView.window {
-            context.coordinator.install(in: window)
-        }
-    }
-
-    static func dismantleNSView(_ nsView: WindowAttachmentView, coordinator: Coordinator) {
-        coordinator.removeAccessory()
-    }
-
-    @MainActor
-    final class Coordinator: NSObject {
-        var isSidebarCollapsed: Binding<Bool>
-
-        private weak var installedWindow: NSWindow?
-        private var accessory: NSTitlebarAccessoryViewController?
-        private let button = NSButton()
-
-        init(isSidebarCollapsed: Binding<Bool>) {
-            self.isSidebarCollapsed = isSidebarCollapsed
-            super.init()
-
-            button.target = self
-            button.action = #selector(toggleSidebar)
-            button.isBordered = false
-            button.imagePosition = .imageOnly
-            button.imageScaling = .scaleProportionallyDown
-            button.contentTintColor = .secondaryLabelColor
-            button.focusRingType = .none
-        }
-
-        func install(in window: NSWindow?) {
-            guard let window else { return }
-            guard installedWindow !== window else {
-                updateButton()
-                return
-            }
-
-            removeAccessory()
-            installedWindow = window
-            window.titleVisibility = .hidden
-            window.titlebarAppearsTransparent = true
-
-            let container = NSView(frame: NSRect(x: 0, y: 0, width: 36, height: 28))
-            button.frame = NSRect(x: 4, y: 0, width: 28, height: 28)
-            button.autoresizingMask = [.minYMargin, .maxYMargin]
-            container.addSubview(button)
-
-            let accessory = NSTitlebarAccessoryViewController()
-            accessory.layoutAttribute = .left
-            accessory.view = container
-            window.addTitlebarAccessoryViewController(accessory)
-            self.accessory = accessory
-            updateButton()
-        }
-
-        func updateButton() {
-            let isCollapsed = isSidebarCollapsed.wrappedValue
-            let description = isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"
-            button.image = NSImage(
-                systemSymbolName: "sidebar.left",
-                accessibilityDescription: description
-            )
-            button.toolTip = description
-            button.setAccessibilityLabel(description)
-        }
-
-        func removeAccessory() {
-            guard let installedWindow, let accessory,
-                  let index = installedWindow.titlebarAccessoryViewControllers.firstIndex(where: { $0 === accessory })
-            else {
-                self.accessory = nil
-                self.installedWindow = nil
-                return
-            }
-
-            installedWindow.removeTitlebarAccessoryViewController(at: index)
-            self.accessory = nil
-            self.installedWindow = nil
-        }
-
-        @objc private func toggleSidebar() {
-            isSidebarCollapsed.wrappedValue.toggle()
-            updateButton()
-        }
-    }
-}
-
-private final class WindowAttachmentView: NSView {
-    var onWindowChange: ((NSWindow?) -> Void)?
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        onWindowChange?(window)
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(isCollapsed ? "Expand Sidebar" : "Collapse Sidebar")
+        .accessibilityLabel(isCollapsed ? "Expand Sidebar" : "Collapse Sidebar")
     }
 }
 
@@ -386,7 +300,7 @@ private struct LocalSidebarButton: View {
     }
 
     private var buttonBackground: Color {
-        if isSelected { return AppTheme.Colors.brandAccent.opacity(0.16) }
+        if isSelected { return AppTheme.Colors.creamSurface }
         if isHovered { return Color.primary.opacity(0.055) }
         return .clear
     }
@@ -406,7 +320,7 @@ struct LocalReadView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(22)
-            .background(AppTheme.Colors.brandAccent.opacity(0.1))
+            .background(AppTheme.Colors.creamSurface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             TextEditor(text: $text)
@@ -470,7 +384,7 @@ struct LocalActionsView: View {
                     .buttonStyle(.borderedProminent)
             }
             .padding(22)
-            .background(AppTheme.Colors.brandGreen.opacity(0.1))
+            .background(AppTheme.Colors.creamSurface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             VStack(alignment: .leading, spacing: 10) {
@@ -491,7 +405,7 @@ struct LocalActionsView: View {
                 }
             }
             .padding(14)
-            .background(AppTheme.Colors.brandAccent.opacity(0.08))
+            .background(AppTheme.Colors.creamSurface.opacity(0.72))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
             List {

@@ -40,27 +40,26 @@ struct AppTheme {
         static var brandAccent: Color {
             Color(nsColor: NSColor(name: "VibeReadAccent", dynamicProvider: { appearance in
                 if appearance.name == .darkAqua {
-                    return NSColor(calibratedRed: 0.74, green: 0.66, blue: 0.96, alpha: 1)
+                    return NSColor(calibratedRed: 0.94, green: 0.91, blue: 0.83, alpha: 1)
                 }
-                return NSColor(calibratedRed: 0.43, green: 0.31, blue: 0.70, alpha: 1)
+                return NSColor(calibratedRed: 0.16, green: 0.15, blue: 0.14, alpha: 1)
             }))
         }
 
         static var brandGreen: Color {
-            Color(nsColor: NSColor(name: "VibeReadGreen", dynamicProvider: { appearance in
-                if appearance.name == .darkAqua {
-                    return NSColor(calibratedRed: 0.30, green: 0.72, blue: 0.61, alpha: 1)
-                }
-                return NSColor(calibratedRed: 0.00, green: 0.36, blue: 0.30, alpha: 1)
-            }))
+            brandAccent
         }
 
         static var brandWarm: Color {
-            Color(nsColor: NSColor(name: "VibeReadWarm", dynamicProvider: { appearance in
+            brandAccent
+        }
+
+        static var creamSurface: Color {
+            Color(nsColor: NSColor(name: "VibeReadCream", dynamicProvider: { appearance in
                 if appearance.name == .darkAqua {
-                    return NSColor(calibratedRed: 0.96, green: 0.65, blue: 0.38, alpha: 1)
+                    return NSColor(calibratedRed: 0.19, green: 0.18, blue: 0.16, alpha: 1)
                 }
-                return NSColor(calibratedRed: 0.78, green: 0.38, blue: 0.12, alpha: 1)
+                return NSColor(calibratedRed: 0.96, green: 0.94, blue: 0.88, alpha: 1)
             }))
         }
     }
@@ -69,5 +68,6 @@ struct AppTheme {
         static let sidebarWidth: CGFloat = 200
         static let contentCornerRadius: CGFloat = 12
         static let contentPadding: CGFloat = 12
+        static let titlebarHeight: CGFloat = 40
     }
 }

@@ -19,8 +19,8 @@ struct ConfettiView: View {
     @State private var celebrationID = UUID()
 
     private let colors: [Color] = [
-        Color(red: 0.74, green: 0.66, blue: 0.96),
-        Color(red: 0.89, green: 0.79, blue: 0.98),
+        Color(red: 0.96, green: 0.92, blue: 0.80),
+        Color(red: 0.35, green: 0.33, blue: 0.29),
         Color(red: 1.00, green: 0.77, blue: 0.38),
         Color(red: 0.98, green: 0.43, blue: 0.58),
         Color(red: 0.26, green: 0.78, blue: 0.68),

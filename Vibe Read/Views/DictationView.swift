@@ -21,8 +21,8 @@ struct DictationView: View {
                 .background {
                     LinearGradient(
                         colors: [
-                            AppTheme.Colors.brandAccent.opacity(0.11),
-                            AppTheme.Colors.brandGreen.opacity(0.045),
+                            AppTheme.Colors.creamSurface.opacity(0.72),
+                            AppTheme.Colors.creamSurface.opacity(0.24),
                             Color.clear
                         ],
                         startPoint: .leading,
@@ -89,8 +89,8 @@ struct DictationStatsHeader: View {
     var body: some View {
         HStack(spacing: 44) {
             StatItem(value: "\(wpm)", label: "WPM", icon: "speedometer", color: AppTheme.Colors.brandAccent)
-            StatItem(value: "\(totalWords)", label: "Words", icon: "text.alignleft", color: AppTheme.Colors.brandGreen)
-            StatItem(value: formatDuration(totalDurationSeconds), label: "Time", icon: "clock", color: AppTheme.Colors.brandWarm)
+            StatItem(value: "\(totalWords)", label: "Words", icon: "text.alignleft", color: AppTheme.Colors.brandAccent)
+            StatItem(value: formatDuration(totalDurationSeconds), label: "Time", icon: "clock", color: AppTheme.Colors.brandAccent)
             Spacer()
         }
     }

@@ -16,8 +16,8 @@ struct DictationView: View {
         VStack(spacing: 0) {
             // Stats Header
             DictationStatsHeader(items: store.items)
-                .padding(.horizontal, 28)
-                .padding(.vertical, 22)
+                .padding(.horizontal, AppTheme.Dimensions.pageInset)
+                .padding(.vertical, AppTheme.Dimensions.pageTopInset)
                 .background(AppTheme.Colors.contentBackground)
                 .overlay(
                     Rectangle()
@@ -25,11 +25,6 @@ struct DictationView: View {
                         .foregroundColor(AppTheme.Colors.border),
                     alignment: .bottom
                 )
-
-            // Sub-tab picker (optional, maybe keep it cleaner like Flow?)
-            // Flow puts Dictionary (Vocabulary) on the sidebar or separate.
-            // But user said "Dictation... is where you have dictionary".
-            // Let's keep the picker but make it look nicer.
 
             HStack {
                 Picker("", selection: $selectedSubTab) {
@@ -39,11 +34,12 @@ struct DictationView: View {
                 }
                 .pickerStyle(.segmented)
                 .tint(Color.gray)
-                .frame(width: 280)
+                .frame(width: 260)
 
                 Spacer()
             }
-            .padding()
+            .padding(.horizontal, AppTheme.Dimensions.pageInset)
+            .padding(.vertical, 16)
 
             // Content
             switch selectedSubTab {
@@ -147,7 +143,7 @@ struct DictationHistoryView: View {
                             .tracking(0.5)
                         Spacer()
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, AppTheme.Dimensions.pageInset)
                     .padding(.top, 24)
                     .padding(.bottom, 12)
 
@@ -174,7 +170,7 @@ struct DictationHistoryView: View {
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .stroke(AppTheme.Colors.border, lineWidth: 1)
                     )
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, AppTheme.Dimensions.pageInset)
                 }
 
                 // Load more trigger
@@ -446,8 +442,8 @@ struct VocabularyView: View {
                 .buttonStyle(.plain)
                 .disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .padding(24)
-            .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+            .padding(.horizontal, AppTheme.Dimensions.pageInset)
+            .padding(.vertical, 16)
 
             List {
                 ForEach(settings.customVocabulary, id: \.self) { word in

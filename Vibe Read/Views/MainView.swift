@@ -300,7 +300,7 @@ private struct LocalSidebarButton: View {
     }
 
     private var buttonBackground: Color {
-        if isSelected { return AppTheme.Colors.creamSurface }
+        if isSelected { return AppTheme.Colors.sidebarSelection }
         if isHovered { return Color.primary.opacity(0.055) }
         return .clear
     }
@@ -319,9 +319,6 @@ struct LocalReadView: View {
                     .foregroundColor(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(22)
-            .background(AppTheme.Colors.creamSurface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             TextEditor(text: $text)
                 .font(.body)
@@ -356,7 +353,9 @@ struct LocalReadView: View {
                     .foregroundColor(.orange)
             }
         }
-        .padding(36)
+        .padding(.horizontal, AppTheme.Dimensions.pageInset)
+        .padding(.top, AppTheme.Dimensions.pageTopInset)
+        .padding(.bottom, AppTheme.Dimensions.pageInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -383,9 +382,6 @@ struct LocalActionsView: View {
                 Button("Add Action") { store.add() }
                     .buttonStyle(.borderedProminent)
             }
-            .padding(22)
-            .background(AppTheme.Colors.creamSurface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             VStack(alignment: .leading, spacing: 10) {
                 Text("Built-in actions").font(.headline)
@@ -404,9 +400,7 @@ struct LocalActionsView: View {
                     }
                 }
             }
-            .padding(14)
-            .background(AppTheme.Colors.creamSurface.opacity(0.72))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.vertical, 2)
 
             List {
                 ForEach($store.actions) { $action in
@@ -431,7 +425,9 @@ struct LocalActionsView: View {
                 Button("Reset Actions") { store.reset() }
             }
         }
-        .padding(36)
+        .padding(.horizontal, AppTheme.Dimensions.pageInset)
+        .padding(.top, AppTheme.Dimensions.pageTopInset)
+        .padding(.bottom, AppTheme.Dimensions.pageInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

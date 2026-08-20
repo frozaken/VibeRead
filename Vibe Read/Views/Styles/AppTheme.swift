@@ -8,10 +8,9 @@ struct AppTheme {
             // Using a slightly warmer variant than standard window background
             Color(nsColor: NSColor(name: "WarmSidebar", dynamicProvider: { appearance in
                 if appearance.name == .darkAqua {
-                    // Slightly warmer dark grey (hint of brown/creme)
                     return NSColor(calibratedRed: 0.13, green: 0.125, blue: 0.12, alpha: 1.0)
                 } else {
-                    return NSColor(calibratedRed: 0.98, green: 0.97, blue: 0.93, alpha: 1.0)
+                    return NSColor(calibratedRed: 0.965, green: 0.962, blue: 0.95, alpha: 1.0)
                 }
             }))
         }
@@ -53,12 +52,12 @@ struct AppTheme {
             brandAccent
         }
 
-        static var creamSurface: Color {
-            Color(nsColor: NSColor(name: "VibeReadCream", dynamicProvider: { appearance in
+        static var sidebarSelection: Color {
+            Color(nsColor: NSColor(name: "VibeReadSidebarSelection", dynamicProvider: { appearance in
                 if appearance.name == .darkAqua {
-                    return NSColor(calibratedRed: 0.19, green: 0.18, blue: 0.16, alpha: 1)
+                    return NSColor(calibratedWhite: 0.19, alpha: 1)
                 }
-                return NSColor(calibratedRed: 0.96, green: 0.94, blue: 0.88, alpha: 1)
+                return NSColor(calibratedRed: 0.92, green: 0.915, blue: 0.895, alpha: 1)
             }))
         }
     }
@@ -68,5 +67,7 @@ struct AppTheme {
         static let contentCornerRadius: CGFloat = 12
         static let contentPadding: CGFloat = 12
         static let titlebarHeight: CGFloat = 40
+        static let pageInset: CGFloat = 24
+        static let pageTopInset: CGFloat = 22
     }
 }

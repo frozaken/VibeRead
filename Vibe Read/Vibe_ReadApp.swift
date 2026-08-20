@@ -23,7 +23,8 @@ enum DictationShortcutPolicy {
     ) -> Bool {
         guard !microphonePermissionRequestInFlight else { return false }
         switch state {
-        case .idle, .done, .error, .cancelled, .cancelledWhileTranscribing:
+        case .idle, .done, .error, .clipboardConfirmation, .deliveryNotice,
+             .cancelled, .cancelledWhileTranscribing:
             return true
         case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart,
              .recordingWarning, .transcribing, .transcribingHandsFree,

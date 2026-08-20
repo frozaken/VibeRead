@@ -52,6 +52,25 @@ class KeyboardShortcutService: ObservableObject {
     private var activeCarbonPushToTalkID: UInt32?
     private var activeCarbonOneShotID: UInt32?
 
+    // Clipboard confirmation temporarily owns bare Return, keypad Enter, and
+    // Escape. These fixed IDs live far outside the sequential range used by
+    // configurable shortcuts, and their references are managed separately so
+    // rebuilding user shortcuts cannot release a visible confirmation.
+    private static let clipboardConfirmReturnID: UInt32 = 0xFFFF_FF01
+    private static let clipboardConfirmKeypadEnterID: UInt32 = 0xFFFF_FF02
+    private static let clipboardKeepEscapeID: UInt32 = 0xFFFF_FF03
+    private static let clipboardConfirmationIDs: Set<UInt32> = [
+        clipboardConfirmReturnID,
+        clipboardConfirmKeypadEnterID,
+        clipboardKeepEscapeID
+    ]
+    private var clipboardConfirmationHotKeyReferences: [UInt32: EventHotKeyRef] = [:]
+    private var clipboardConfirmationOnConfirm: (() -> Void)?
+    private var clipboardConfirmationOnKeep: (() -> Void)?
+    private var activeClipboardConfirmationKeyID: UInt32?
+    private var didResolveClipboardConfirmation = false
+    private var clipboardConfirmationCleanupWorkItem: DispatchWorkItem?
+
     // State tracking
     private var isPushToTalkActive = false
     private var lastFnState = false
@@ -174,12 +193,133 @@ class KeyboardShortcutService: ObservableObject {
             NSEvent.removeMonitor(monitor)
             globalMonitor = nil
         }
+        clearClipboardConfirmationHotKeys()
         unregisterCarbonHotKeys()
         if let carbonEventHandler {
             RemoveEventHandler(carbonEventHandler)
             self.carbonEventHandler = nil
         }
         print("[Shortcuts] Stopped monitoring")
+    }
+
+    // MARK: - Clipboard Confirmation Hotkeys
+
+    /// Exclusively reserves the unmodified confirmation keys while the
+    /// clipboard prompt is visible. Carbon is used instead of an NSEvent
+    /// global monitor because passive monitors cannot stop Return from also
+    /// reaching the foreground application.
+    @discardableResult
+    func beginClipboardConfirmation(
+        onConfirm: @escaping () -> Void,
+        onKeep: @escaping () -> Void
+    ) -> Bool {
+        clearClipboardConfirmationHotKeys()
+        installCarbonEventHandlerIfNeeded()
+        guard carbonEventHandler != nil else { return false }
+
+        clipboardConfirmationOnConfirm = onConfirm
+        clipboardConfirmationOnKeep = onKeep
+        didResolveClipboardConfirmation = false
+
+        let definitions: [(id: UInt32, keyCode: UInt32)] = [
+            (Self.clipboardConfirmReturnID, 36),
+            (Self.clipboardConfirmKeypadEnterID, 76),
+            (Self.clipboardKeepEscapeID, 53)
+        ]
+
+        for definition in definitions {
+            let hotKeyID = EventHotKeyID(
+                signature: Self.hotKeySignature,
+                id: definition.id
+            )
+            var reference: EventHotKeyRef?
+            let status = RegisterEventHotKey(
+                definition.keyCode,
+                0,
+                hotKeyID,
+                GetApplicationEventTarget(),
+                OptionBits(kEventHotKeyExclusive),
+                &reference
+            )
+            guard status == noErr, let reference else {
+                clearClipboardConfirmationHotKeys()
+                print("[Shortcuts] Could not reserve clipboard confirmation keys")
+                return false
+            }
+            clipboardConfirmationHotKeyReferences[definition.id] = reference
+        }
+
+        return true
+    }
+
+    /// Ends a visible clipboard confirmation. Mouse actions and timeouts have
+    /// no pressed key, so they release the reservations immediately. A key
+    /// action keeps its reservation until key-up (or the safety timeout) so a
+    /// held Return cannot begin typing into the foreground application.
+    func endClipboardConfirmation() {
+        clipboardConfirmationOnConfirm = nil
+        clipboardConfirmationOnKeep = nil
+        didResolveClipboardConfirmation = true
+
+        if activeClipboardConfirmationKeyID != nil {
+            scheduleClipboardConfirmationCleanup()
+        } else {
+            clearClipboardConfirmationHotKeys()
+        }
+    }
+
+    private func handleClipboardConfirmationHotKey(
+        id: UInt32,
+        eventKind: UInt32
+    ) {
+        switch eventKind {
+        case UInt32(kEventHotKeyPressed):
+            guard !didResolveClipboardConfirmation,
+                  clipboardConfirmationHotKeyReferences[id] != nil else { return }
+
+            didResolveClipboardConfirmation = true
+            activeClipboardConfirmationKeyID = id
+            let callback = id == Self.clipboardKeepEscapeID
+                ? clipboardConfirmationOnKeep
+                : clipboardConfirmationOnConfirm
+            clipboardConfirmationOnConfirm = nil
+            clipboardConfirmationOnKeep = nil
+
+            // Keep the pressed key reserved until its release. The timeout is
+            // only a failsafe for a missing Carbon release notification.
+            scheduleClipboardConfirmationCleanup()
+            callback?()
+
+        case UInt32(kEventHotKeyReleased):
+            if activeClipboardConfirmationKeyID == id {
+                clearClipboardConfirmationHotKeys()
+            }
+
+        default:
+            break
+        }
+    }
+
+    private func scheduleClipboardConfirmationCleanup() {
+        clipboardConfirmationCleanupWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.clearClipboardConfirmationHotKeys()
+        }
+        clipboardConfirmationCleanupWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: workItem)
+    }
+
+    private func clearClipboardConfirmationHotKeys() {
+        clipboardConfirmationCleanupWorkItem?.cancel()
+        clipboardConfirmationCleanupWorkItem = nil
+        for reference in clipboardConfirmationHotKeyReferences.values {
+            UnregisterEventHotKey(reference)
+        }
+        clipboardConfirmationHotKeyReferences.removeAll()
+        clipboardConfirmationOnConfirm = nil
+        clipboardConfirmationOnKeep = nil
+        activeClipboardConfirmationKeyID = nil
+        didResolveClipboardConfirmation = false
     }
 
     // MARK: - Reserved Carbon Hotkeys
@@ -336,6 +476,11 @@ class KeyboardShortcutService: ObservableObject {
     }
 
     private func handleCarbonHotKey(id: UInt32, eventKind: UInt32) {
+        if Self.clipboardConfirmationIDs.contains(id) {
+            handleClipboardConfirmationHotKey(id: id, eventKind: eventKind)
+            return
+        }
+
         guard let shortcut = carbonShortcuts[id] else { return }
 
         switch eventKind {

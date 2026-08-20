@@ -11,24 +11,25 @@ enum PasteFailure: Equatable {
     case clipboardUnavailable
 }
 
-enum PasteOutcome: Equatable {
+enum AutoPasteOutcome: Equatable {
     case pasted
-    case copiedOnly(PasteFailure)
     case failed(PasteFailure)
 
     var didPaste: Bool {
         if case .pasted = self { return true }
         return false
     }
+}
 
-    var isOnClipboard: Bool {
-        switch self {
-        case .pasted, .copiedOnly:
-            return true
-        case .failed:
-            return false
-        }
-    }
+struct ClipboardObservation: Equatable {
+    let changeCount: Int
+    let hasContent: Bool
+}
+
+enum ClipboardReplacementOutcome: Equatable {
+    case copied
+    case changed
+    case unavailable
 }
 
 /// Permission and focused-application operations that macOS protects behind
@@ -236,23 +237,56 @@ class AccessibilityService: ObservableObject {
 
     // MARK: - Paste Text
 
-    /// Put completed text on the clipboard without posting a key event.
-    /// This is the fail-safe when no trustworthy paste destination exists.
-    @discardableResult
-    func copyTextToClipboard(_ text: String) -> Bool {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        return pasteboard.setString(text, forType: .string)
+    /// Observe whether replacing the clipboard needs the user's consent.
+    /// Any pasteboard type counts as content, including images and rich text.
+    func clipboardObservation() -> ClipboardObservation {
+        Self.clipboardObservation(pasteboard: .general)
     }
 
-    /// Paste text at the current cursor position and leave the text on the
-    /// clipboard. Keeping the output there is the recovery path when an app
-    /// such as an Electron editor does not consume the synthetic Cmd+V.
-    func pasteTextWithOutcome(
+    static func clipboardObservation(pasteboard: NSPasteboard) -> ClipboardObservation {
+        ClipboardObservation(
+            changeCount: pasteboard.changeCount,
+            hasContent: !(pasteboard.types?.isEmpty ?? true)
+        )
+    }
+
+    /// Replace the clipboard only if it has not changed since the prompt was
+    /// shown. This prevents a stale Return press from destroying newer data.
+    func replaceClipboardIfUnchanged(
+        _ text: String,
+        expectedChangeCount: Int
+    ) -> ClipboardReplacementOutcome {
+        Self.replaceClipboardIfUnchanged(
+            text,
+            expectedChangeCount: expectedChangeCount,
+            pasteboard: .general
+        )
+    }
+
+    static func replaceClipboardIfUnchanged(
+        _ text: String,
+        expectedChangeCount: Int,
+        pasteboard: NSPasteboard
+    ) -> ClipboardReplacementOutcome {
+        guard pasteboard.changeCount == expectedChangeCount else { return .changed }
+        let previousItems = (pasteboard.pasteboardItems ?? []).map {
+            PasteboardItemSnapshot(item: $0)
+        }
+        pasteboard.clearContents()
+        guard pasteboard.setString(text, forType: .string) else {
+            restore(previousItems, to: pasteboard)
+            return .unavailable
+        }
+        return .copied
+    }
+
+    /// Attempt automatic paste while preserving the user's existing rich
+    /// clipboard. A known failure never replaces the clipboard.
+    func pasteTextPreservingClipboardWithOutcome(
         _ text: String,
         expectedTarget: UniversalActionTarget? = nil
-    ) -> PasteOutcome {
-        let outcome = Self.deliverText(
+    ) -> AutoPasteOutcome {
+        let outcome = Self.deliverTextPreservingClipboard(
             text,
             expectedTarget: expectedTarget,
             pasteboard: .general,
@@ -269,20 +303,25 @@ class AccessibilityService: ObservableObject {
             },
             postPasteShortcut: { [weak self] in
                 self?.simulateKeyPress(keyCode: 9, modifiers: .maskCommand) ?? false
+            },
+            scheduleRestore: { restore in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    restore()
+                }
             }
         )
 
         switch outcome {
         case .pasted:
-            print("[Accessibility] Paste shortcut posted; text retained on clipboard")
-        case .copiedOnly(.accessibilityDenied):
-            print("[Accessibility] Copied text; cannot paste without Accessibility permission")
-        case .copiedOnly(.targetChanged):
-            print("[Accessibility] Copied text; paste target changed")
-        case .copiedOnly(.eventUnavailable):
-            print("[Accessibility] Copied text; paste shortcut unavailable")
-        case .copiedOnly(.clipboardUnavailable), .failed:
-            print("[Accessibility] Could not place text on the clipboard")
+            print("[Accessibility] Paste shortcut posted; previous clipboard scheduled for restore")
+        case .failed(.accessibilityDenied):
+            print("[Accessibility] Cannot paste without Accessibility permission")
+        case .failed(.targetChanged):
+            print("[Accessibility] Paste target changed")
+        case .failed(.eventUnavailable):
+            print("[Accessibility] Paste shortcut unavailable")
+        case .failed(.clipboardUnavailable):
+            print("[Accessibility] Could not stage text for paste")
         }
 
         return outcome
@@ -295,7 +334,7 @@ class AccessibilityService: ObservableObject {
         _ text: String,
         expectedTarget: UniversalActionTarget? = nil
     ) -> Bool {
-        Self.deliverTextTemporarily(
+        Self.deliverTextPreservingClipboard(
             text,
             expectedTarget: expectedTarget,
             pasteboard: .general,
@@ -309,43 +348,12 @@ class AccessibilityService: ObservableObject {
                     restore()
                 }
             }
-        )
+        ).didPaste
     }
 
-    /// Deterministic core used by unit tests and the live Accessibility path.
-    /// The clipboard write deliberately precedes every guarded paste outcome,
-    /// so a completed dictation is recoverable without opening History.
-    static func deliverText(
-        _ text: String,
-        expectedTarget: UniversalActionTarget?,
-        pasteboard: NSPasteboard,
-        hasAccessibilityPermission: Bool,
-        currentTarget: () -> UniversalActionTarget?,
-        postPasteShortcut: () -> Bool
-    ) -> PasteOutcome {
-        pasteboard.clearContents()
-        guard pasteboard.setString(text, forType: .string) else {
-            return .failed(.clipboardUnavailable)
-        }
-
-        guard hasAccessibilityPermission else {
-            return .copiedOnly(.accessibilityDenied)
-        }
-
-        if let expectedTarget,
-           !targetMatches(expectedTarget, currentTarget()) {
-            return .copiedOnly(.targetChanged)
-        }
-
-        guard postPasteShortcut() else {
-            return .copiedOnly(.eventUnavailable)
-        }
-        return .pasted
-    }
-
-    /// Deterministic core for explicit actions whose output should not replace
-    /// the user's clipboard after Cmd+V has been posted.
-    static func deliverTextTemporarily(
+    /// Deterministic core for automatic paste and explicit actions. It stages
+    /// text only long enough to post Cmd+V, then restores the old clipboard.
+    static func deliverTextPreservingClipboard(
         _ text: String,
         expectedTarget: UniversalActionTarget?,
         pasteboard: NSPasteboard,
@@ -353,11 +361,13 @@ class AccessibilityService: ObservableObject {
         currentTarget: () -> UniversalActionTarget?,
         postPasteShortcut: () -> Bool,
         scheduleRestore: (@escaping () -> Void) -> Void
-    ) -> Bool {
-        guard hasAccessibilityPermission else { return false }
+    ) -> AutoPasteOutcome {
+        guard hasAccessibilityPermission else {
+            return .failed(.accessibilityDenied)
+        }
         if let expectedTarget,
            !targetMatches(expectedTarget, currentTarget()) {
-            return false
+            return .failed(.targetChanged)
         }
 
         let previousItems = (pasteboard.pasteboardItems ?? []).map {
@@ -366,7 +376,7 @@ class AccessibilityService: ObservableObject {
         pasteboard.clearContents()
         guard pasteboard.setString(text, forType: .string) else {
             restore(previousItems, to: pasteboard)
-            return false
+            return .failed(.clipboardUnavailable)
         }
         let temporaryChangeCount = pasteboard.changeCount
 
@@ -377,21 +387,21 @@ class AccessibilityService: ObservableObject {
             if pasteboard.changeCount == temporaryChangeCount {
                 restore(previousItems, to: pasteboard)
             }
-            return false
+            return .failed(.targetChanged)
         }
 
         guard postPasteShortcut() else {
             if pasteboard.changeCount == temporaryChangeCount {
                 restore(previousItems, to: pasteboard)
             }
-            return false
+            return .failed(.eventUnavailable)
         }
 
         scheduleRestore {
             guard pasteboard.changeCount == temporaryChangeCount else { return }
             restore(previousItems, to: pasteboard)
         }
-        return true
+        return .pasted
     }
 
     private static func targetMatches(

@@ -61,8 +61,11 @@ invokes a text model.
 
 The app containing your cursor when you press Send becomes the paste
 destination. Vibe Read checks that the same app is still active before posting
-Cmd + V. Completed auto-paste dictations also remain on the clipboard, so a
-blocked or ignored paste can always be recovered with Cmd + V.
+Cmd + V, then restores whatever was already on your clipboard. If Vibe Read
+knows the paste failed, it copies automatically only when the clipboard is
+empty. When the clipboard already contains something, a small prompt lets you
+press Return to replace it or Escape to keep it. The dictation remains in local
+History either way.
 
 Smart Dictation and provider-backed Cmd + E actions are optional. Configure a
 text provider such as Groq, OpenRouter, OpenAI, or a compatible local service,
@@ -206,7 +209,7 @@ Vibe Read stores its own data on your Mac. Provider requests go directly from th
 | Dictation audio | Your configured provider when you transcribe |
 | Text used by an action | Your configured text provider when you run that action |
 | Smart Dictation text | Your configured text provider only when you use Smart Dictation. The request contains the raw transcript, your local Smart prompt, and a sanitized original app name. |
-| Completed auto-paste text | Local clipboard, so the result remains recoverable if automatic paste is blocked or ignored |
+| Completed auto-paste text | Temporarily staged on the local clipboard for Cmd + V, then the previous clipboard is restored. A known fallback replaces an occupied clipboard only after confirmation. |
 | Saved Library items | Local JSON until you delete them |
 | ElevenLabs voice list | Voice metadata is fetched only when you choose Load Voices and may be cached in macOS preferences |
 | Read-aloud or preview text | ElevenLabs only when selected, otherwise the macOS speech synthesizer. Preview and read requests use your provider credits. |

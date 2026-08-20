@@ -67,7 +67,10 @@ configured without an API key.
 7. Vibe Read saves the raw transcript and final text to a local SQLite
    database. The app containing the cursor when Send is pressed becomes the
    delivery target. Vibe Read rechecks that target before posting Cmd + V and
-   leaves the completed text on the clipboard as a recovery path.
+   restores the previous clipboard after the paste attempt. If a known paste
+   failure needs a clipboard fallback, an empty clipboard is filled directly.
+   An occupied clipboard is replaced only after the user confirms with Return
+   or the Copy button. Escape, Keep, and timeout preserve it.
 8. The retained recording is stored under Application Support. Audio is
    deleted after seven days by default. Transcript text remains until the user
    deletes it.

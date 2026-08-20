@@ -55,6 +55,8 @@ class FloatingHUDController: NSObject, ObservableObject {
         case transcribingSmart
         case transcribingSlow  // Taking longer than expected
         case dictationDone
+        case clipboardConfirmation(returnKeyEnabled: Bool)
+        case deliveryNotice(message: String)
         case cancelled  // With undo option
         case cancelledWhileTranscribing  // Cancelled during processing
 
@@ -92,6 +94,10 @@ class FloatingHUDController: NSObject, ObservableObject {
     // Cancelled/undo pill (minimal)
     private let cancelledWidth: CGFloat = 220
     private let cancelledHeight: CGFloat = 40
+    private let clipboardConfirmationWidth: CGFloat = 310
+    private let clipboardConfirmationHeight: CGFloat = 48
+    private let deliveryNoticeWidth: CGFloat = 280
+    private let deliveryNoticeHeight: CGFloat = 40
     // Warning pill (wider for message)
     private let warningWidth: CGFloat = 280
     private let warningHeight: CGFloat = 56
@@ -120,12 +126,14 @@ class FloatingHUDController: NSObject, ObservableObject {
     }
 
     private func setupKeyMonitors() {
-        // Escape key monitor for dictation cancel (global to work even when app not focused)
+        // Escape key monitor for dictation cancel. Clipboard confirmation uses
+        // exclusive Carbon hotkeys so Escape cannot leak into the foreground
+        // application; when reservation fails, the prompt remains clickable.
         escapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+            let dictationState = DictationService.shared.state
+
             guard event.keyCode == 53 else { return }  // 53 = Escape key
 
-            // Only handle if dictation is recording or transcribing
-            let dictationState = DictationService.shared.state
             switch dictationState {
             case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow:
                 DictationService.shared.cancel()
@@ -136,10 +144,14 @@ class FloatingHUDController: NSObject, ObservableObject {
 
         // Also add local monitor for when app is focused
         _ = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let dictationState = DictationService.shared.state
+
             guard event.keyCode == 53 else { return event }  // 53 = Escape key
 
-            let dictationState = DictationService.shared.state
             switch dictationState {
+            case .clipboardConfirmation:
+                DictationService.shared.keepExistingClipboard()
+                return nil
             case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow:
                 DictationService.shared.cancel()
                 return nil  // Consume the event
@@ -415,6 +427,7 @@ class FloatingHUDController: NSObject, ObservableObject {
             // pill that `hide()` correctly refuses to dismiss during speech.
             if isTTSActive {
                 let tts = InstantTTSService.shared
+                state = .hidden
                 updateState(isLoading: tts.isLoading, isSpeaking: tts.isSpeaking, error: tts.error)
                 warningMessage = ""
                 return
@@ -431,6 +444,8 @@ class FloatingHUDController: NSObject, ObservableObject {
             else if case .transcribingSmart = state { hide() }
             else if case .transcribingSlow = state { hide() }
             else if case .dictationDone = state { hide() }
+            else if case .clipboardConfirmation = state { hide() }
+            else if case .deliveryNotice = state { hide() }
             else if case .cancelled = state { hide() }
             else if case .cancelledWhileTranscribing = state { hide() }
             warningMessage = ""
@@ -492,6 +507,17 @@ class FloatingHUDController: NSObject, ObservableObject {
             show()
             scheduleHide(after: 0.3)
 
+        case .clipboardConfirmation(let returnKeyEnabled):
+            state = .clipboardConfirmation(returnKeyEnabled: returnKeyEnabled)
+            updateWindowSizeForClipboardConfirmation()
+            show()
+
+        case .deliveryNotice(let message):
+            state = .deliveryNotice(message: message)
+            updateWindowSizeForDeliveryNotice()
+            show()
+            scheduleDeliveryNoticeHide(after: 1.5)
+
         case .cancelled:
             state = .cancelled
             updateWindowSizeForCancelled()
@@ -517,6 +543,20 @@ class FloatingHUDController: NSObject, ObservableObject {
 
     private func updateWindowSizeForWarning() {
         currentVisualSize = CGSize(width: warningWidth, height: warningHeight)
+    }
+
+    private func updateWindowSizeForClipboardConfirmation() {
+        currentVisualSize = CGSize(
+            width: clipboardConfirmationWidth,
+            height: clipboardConfirmationHeight
+        )
+    }
+
+    private func updateWindowSizeForDeliveryNotice() {
+        currentVisualSize = CGSize(
+            width: deliveryNoticeWidth,
+            height: deliveryNoticeHeight
+        )
     }
 
     private func updateWindowSizeForDictation() {
@@ -565,6 +605,12 @@ class FloatingHUDController: NSObject, ObservableObject {
 
         print("[HUD] updateState - isLoading: \(isLoading), isSpeaking: \(isSpeaking), error: \(error != nil), dictationActive: \(isDictationActive)")
 
+        // Clipboard delivery owns the HUD until the user decides or the
+        // neutral notice expires. A concurrent TTS publisher must not replace
+        // the prompt, and the notice timer restores its presentation later.
+        if case .clipboardConfirmation = state { return }
+        if case .deliveryNotice = state { return }
+
         if error != nil {
             state = .error
             updateWindowSize(expanded: false)
@@ -610,10 +656,11 @@ class FloatingHUDController: NSObject, ObservableObject {
         switch state {
         case .generating, .playing,
              .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning,
-             .transcribingSlow, .error, .cancelled, .cancelledWhileTranscribing:
+             .transcribingSlow, .error, .clipboardConfirmation,
+             .cancelled, .cancelledWhileTranscribing:
             setInteractive(true)
         case .hidden, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart,
-             .dictationDone:
+             .dictationDone, .deliveryNotice:
             setInteractive(false)
         }
     }
@@ -733,6 +780,35 @@ class FloatingHUDController: NSObject, ObservableObject {
         }
     }
 
+    private func scheduleDeliveryNoticeHide(after seconds: TimeInterval) {
+        cancelHideTimer()
+        let presentationToken = presentationGuard.currentToken
+
+        hideTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard self.presentationGuard.isCurrent(presentationToken) else { return }
+                guard case .deliveryNotice = self.state else { return }
+                self.hideTimer = nil
+
+                let tts = InstantTTSService.shared
+                self.isTTSActive = tts.isLoading || tts.isSpeaking
+                if tts.isLoading {
+                    self.generatingMessage = "Generating audio..."
+                    self.state = .generating(message: self.generatingMessage)
+                    self.updateWindowSizeForGenerating()
+                    self.show()
+                } else if tts.isSpeaking {
+                    self.state = .playing
+                    self.updateWindowSizeForTTSPlayer()
+                    self.show()
+                } else {
+                    self.hide()
+                }
+            }
+        }
+    }
+
     private func cancelHideTimer() {
         hideTimer?.invalidate()
         hideTimer = nil
@@ -774,6 +850,10 @@ struct PillIndicatorView: View {
                     smartTranscribingPill
                 case .transcribingSlow:
                     slowTranscribingPill
+                case .clipboardConfirmation(let returnKeyEnabled):
+                    clipboardConfirmationPill(returnKeyEnabled: returnKeyEnabled)
+                case .deliveryNotice(let message):
+                    deliveryNoticePill(message: message)
                 case .error:
                     errorPill
                 case .cancelled:
@@ -986,6 +1066,77 @@ struct PillIndicatorView: View {
         )
         .accessibilityLabel("Smart dictation is editing")
         .allowsHitTesting(false)
+    }
+
+    // MARK: - Clipboard Delivery
+
+    private func clipboardConfirmationPill(returnKeyEnabled: Bool) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Paste failed")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.primary)
+
+                Text(returnKeyEnabled
+                     ? "Return to copy · Esc keeps clipboard"
+                     : "Choose Copy or Keep")
+                    .font(.system(size: 9.5, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 2)
+
+            clipboardChoiceButton("Copy") {
+                DictationService.shared.confirmClipboardOverwrite()
+            }
+
+            clipboardChoiceButton("Keep") {
+                DictationService.shared.keepExistingClipboard()
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(width: 310, height: 48)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Paste failed. Choose whether to copy the dictation or keep the existing clipboard.")
+    }
+
+    private func clipboardChoiceButton(
+        _ title: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 9)
+                .frame(height: 24)
+                .background(
+                    Capsule()
+                        .fill(Color.primary.opacity(0.08))
+                )
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func deliveryNoticePill(message: String) -> some View {
+        Text(message)
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, 14)
+            .frame(width: 280, height: 40)
+            .background(
+                Capsule()
+                    .fill(.ultraThinMaterial)
+            )
+            .accessibilityLabel(message)
+            .allowsHitTesting(false)
     }
 
     // MARK: - Recording Warning Pill (time limit approaching)
@@ -1275,7 +1426,7 @@ struct PillIndicatorView: View {
     @ViewBuilder
     private var compactIndicator: some View {
         switch controller.state {
-        case .hidden, .playing, .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning, .error, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow, .cancelled, .cancelledWhileTranscribing, .generating:
+        case .hidden, .playing, .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning, .error, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow, .clipboardConfirmation, .deliveryNotice, .cancelled, .cancelledWhileTranscribing, .generating:
             // These have their own expanded pills
             EmptyView()
 

@@ -4,9 +4,11 @@ import Testing
 @testable import Vibe_Read
 
 struct ProductWorkflowTests {
-    @Test @MainActor func matchingPasteTargetPostsAndLeavesRecoveryClipboard() throws {
+    @Test @MainActor func matchingPasteTargetRestoresThePreviousClipboard() throws {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("Previous clipboard", forType: .string)
         let target = UniversalActionTarget(
             bundleIdentifier: "com.example.Editor",
             processIdentifier: 42,
@@ -14,7 +16,7 @@ struct ProductWorkflowTests {
         )
         var posted = false
 
-        let outcome = AccessibilityService.deliverText(
+        let outcome = AccessibilityService.deliverTextPreservingClipboard(
             "Finished dictation",
             expectedTarget: target,
             pasteboard: pasteboard,
@@ -23,17 +25,20 @@ struct ProductWorkflowTests {
             postPasteShortcut: {
                 posted = true
                 return true
-            }
+            },
+            scheduleRestore: { restore in restore() }
         )
 
         #expect(outcome == .pasted)
         #expect(posted)
-        #expect(pasteboard.string(forType: .string) == "Finished dictation")
+        #expect(pasteboard.string(forType: .string) == "Previous clipboard")
     }
 
-    @Test @MainActor func changedPasteTargetCopiesWithoutPosting() throws {
+    @Test @MainActor func changedPasteTargetLeavesClipboardUntouched() throws {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("Previous clipboard", forType: .string)
         let slack = UniversalActionTarget(
             bundleIdentifier: "com.tinyspeck.slackmacgap",
             processIdentifier: 42,
@@ -46,7 +51,7 @@ struct ProductWorkflowTests {
         )
         var posted = false
 
-        let outcome = AccessibilityService.deliverText(
+        let outcome = AccessibilityService.deliverTextPreservingClipboard(
             "Recoverable dictation",
             expectedTarget: slack,
             pasteboard: pasteboard,
@@ -55,17 +60,20 @@ struct ProductWorkflowTests {
             postPasteShortcut: {
                 posted = true
                 return true
-            }
+            },
+            scheduleRestore: { restore in restore() }
         )
 
-        #expect(outcome == .copiedOnly(.targetChanged))
+        #expect(outcome == .failed(.targetChanged))
         #expect(!posted)
-        #expect(pasteboard.string(forType: .string) == "Recoverable dictation")
+        #expect(pasteboard.string(forType: .string) == "Previous clipboard")
     }
 
-    @Test @MainActor func deniedAccessibilityStillLeavesRecoveryClipboard() throws {
+    @Test @MainActor func deniedAccessibilityLeavesClipboardUntouched() throws {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("Previous clipboard", forType: .string)
         let target = UniversalActionTarget(
             bundleIdentifier: "com.example.Editor",
             processIdentifier: 42,
@@ -73,7 +81,7 @@ struct ProductWorkflowTests {
         )
         var posted = false
 
-        let outcome = AccessibilityService.deliverText(
+        let outcome = AccessibilityService.deliverTextPreservingClipboard(
             "Recoverable dictation",
             expectedTarget: target,
             pasteboard: pasteboard,
@@ -82,12 +90,13 @@ struct ProductWorkflowTests {
             postPasteShortcut: {
                 posted = true
                 return true
-            }
+            },
+            scheduleRestore: { restore in restore() }
         )
 
-        #expect(outcome == .copiedOnly(.accessibilityDenied))
+        #expect(outcome == .failed(.accessibilityDenied))
         #expect(!posted)
-        #expect(pasteboard.string(forType: .string) == "Recoverable dictation")
+        #expect(pasteboard.string(forType: .string) == "Previous clipboard")
     }
 
     @Test @MainActor func explicitActionPasteRestoresThePreviousClipboard() throws {
@@ -102,7 +111,7 @@ struct ProductWorkflowTests {
         )
         var posted = false
 
-        let didPaste = AccessibilityService.deliverTextTemporarily(
+        let outcome = AccessibilityService.deliverTextPreservingClipboard(
             "Explicit action output",
             expectedTarget: target,
             pasteboard: pasteboard,
@@ -115,8 +124,114 @@ struct ProductWorkflowTests {
             scheduleRestore: { restore in restore() }
         )
 
-        #expect(didPaste)
+        #expect(outcome == .pasted)
         #expect(posted)
+        #expect(pasteboard.string(forType: .string) == "Previous clipboard")
+    }
+
+    @Test @MainActor func emptyClipboardCanAcceptFallbackWithoutAPrompt() throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        let observation = AccessibilityService.clipboardObservation(pasteboard: pasteboard)
+
+        #expect(!observation.hasContent)
+        #expect(
+            AccessibilityService.replaceClipboardIfUnchanged(
+                "Fallback dictation",
+                expectedChangeCount: observation.changeCount,
+                pasteboard: pasteboard
+            ) == .copied
+        )
+        #expect(pasteboard.string(forType: .string) == "Fallback dictation")
+    }
+
+    @Test @MainActor func staleClipboardConfirmationCannotOverwriteNewerContent() throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("Original clipboard", forType: .string)
+        let observation = AccessibilityService.clipboardObservation(pasteboard: pasteboard)
+        #expect(observation.hasContent)
+
+        pasteboard.clearContents()
+        pasteboard.setString("Newer clipboard", forType: .string)
+        #expect(
+            AccessibilityService.replaceClipboardIfUnchanged(
+                "Fallback dictation",
+                expectedChangeCount: observation.changeCount,
+                pasteboard: pasteboard
+            ) == .changed
+        )
+        #expect(pasteboard.string(forType: .string) == "Newer clipboard")
+    }
+
+    @Test @MainActor func delayedRestoreDoesNotClobberANewerClipboard() throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("Original clipboard", forType: .string)
+        let target = UniversalActionTarget(
+            bundleIdentifier: "com.example.Editor",
+            processIdentifier: 42,
+            applicationName: "Editor"
+        )
+        var delayedRestore: (() -> Void)?
+
+        let outcome = AccessibilityService.deliverTextPreservingClipboard(
+            "Finished dictation",
+            expectedTarget: target,
+            pasteboard: pasteboard,
+            hasAccessibilityPermission: true,
+            currentTarget: { target },
+            postPasteShortcut: { true },
+            scheduleRestore: { delayedRestore = $0 }
+        )
+        #expect(outcome == .pasted)
+        #expect(pasteboard.string(forType: .string) == "Finished dictation")
+
+        pasteboard.clearContents()
+        pasteboard.setString("Newer clipboard", forType: .string)
+        delayedRestore?()
+        #expect(pasteboard.string(forType: .string) == "Newer clipboard")
+    }
+
+    @Test @MainActor func targetIsRecheckedAfterClipboardSnapshot() throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("Previous clipboard", forType: .string)
+        let slack = UniversalActionTarget(
+            bundleIdentifier: "com.tinyspeck.slackmacgap",
+            processIdentifier: 42,
+            applicationName: "Slack"
+        )
+        let codex = UniversalActionTarget(
+            bundleIdentifier: "com.openai.codex",
+            processIdentifier: 84,
+            applicationName: "Codex"
+        )
+        var targetChecks = 0
+        var posted = false
+
+        let outcome = AccessibilityService.deliverTextPreservingClipboard(
+            "Finished dictation",
+            expectedTarget: slack,
+            pasteboard: pasteboard,
+            hasAccessibilityPermission: true,
+            currentTarget: {
+                targetChecks += 1
+                return targetChecks == 1 ? slack : codex
+            },
+            postPasteShortcut: {
+                posted = true
+                return true
+            },
+            scheduleRestore: { restore in restore() }
+        )
+
+        #expect(outcome == .failed(.targetChanged))
+        #expect(!posted)
         #expect(pasteboard.string(forType: .string) == "Previous clipboard")
     }
 

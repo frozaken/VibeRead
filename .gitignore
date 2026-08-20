@@ -30,9 +30,13 @@ build/
 *.sqlite3-wal
 *.db
 *.m4a
+*.aac
 *.caf
+*.aif
+*.aiff
 *.wav
 *.mp3
+*.mp4
 *.webm
 
 # CocoaPods

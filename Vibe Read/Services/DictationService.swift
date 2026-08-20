@@ -66,6 +66,8 @@ class DictationService: ObservableObject {
         case transcribingSmart
         case transcribingSlow  // Taking longer than expected
         case done
+        case clipboardConfirmation(returnKeyEnabled: Bool)
+        case deliveryNotice(String)
         case cancelled  // Shows undo option
         case cancelledWhileTranscribing  // Cancelled during transcription
         case error(String)
@@ -98,6 +100,15 @@ class DictationService: ObservableObject {
     private var activeClientID: UUID?
     private var activePasteTarget: UniversalActionTarget?
     private var activeContextApplicationName: String?
+
+    private struct PendingClipboardCopy {
+        let id: UUID
+        let text: String
+        let expectedChangeCount: Int
+    }
+    private var pendingClipboardCopy: PendingClipboardCopy?
+    private var clipboardConfirmationTimer: Timer?
+    private var deliveryNoticeTimer: Timer?
 
     private struct PendingMicrophoneStart {
         let id: UUID
@@ -167,7 +178,7 @@ class DictationService: ObservableObject {
     /// Toggle dictation - start if idle, stop if recording (push-to-talk style)
     func toggle() {
         switch state {
-        case .idle, .done, .error:
+        case .idle, .done, .error, .clipboardConfirmation, .deliveryNotice:
             beginRecording(mode: .normal)
         case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning:
             stopAndTranscribe()
@@ -184,7 +195,7 @@ class DictationService: ObservableObject {
     /// Toggle hands-free dictation - click to start, click to send
     func toggleHandsFree() {
         switch state {
-        case .idle, .done, .error:
+        case .idle, .done, .error, .clipboardConfirmation, .deliveryNotice:
             beginRecording(mode: .handsFree)
         case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning:
             stopAndTranscribe()
@@ -200,7 +211,7 @@ class DictationService: ObservableObject {
     /// Start command mode dictation - sends to AI provider after transcription
     func toggleCommandMode() {
         switch state {
-        case .idle, .done, .error:
+        case .idle, .done, .error, .clipboardConfirmation, .deliveryNotice:
             beginRecording(mode: .command)
         case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning:
             stopAndTranscribe()
@@ -218,7 +229,7 @@ class DictationService: ObservableObject {
     /// to turn spoken instructions into finished text.
     func toggleSmartDictation() {
         switch state {
-        case .idle, .done, .error:
+        case .idle, .done, .error, .clipboardConfirmation, .deliveryNotice:
             beginRecording(mode: .smart)
         case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning:
             stopAndTranscribe()
@@ -233,7 +244,7 @@ class DictationService: ObservableObject {
     /// Start push-to-talk recording (called when fn key is pressed)
     func startPushToTalk() {
         switch state {
-        case .idle, .done, .error:
+        case .idle, .done, .error, .clipboardConfirmation, .deliveryNotice:
             beginRecording(mode: .normal, requiresHeldShortcut: true)
         default:
             break
@@ -269,6 +280,10 @@ class DictationService: ObservableObject {
             cancelRecordingWithUndo()
         case .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow:
             cancelTranscriptionWithUndo()
+        case .clipboardConfirmation:
+            keepExistingClipboard()
+        case .deliveryNotice:
+            state = .idle
         default:
             break
         }
@@ -403,6 +418,8 @@ class DictationService: ObservableObject {
         mode: RecordingMode,
         requiresHeldShortcut: Bool = false
     ) {
+        clearPendingClipboardConfirmation()
+
         // The permission sheet is asynchronous while the public state remains
         // idle. Ignore repeated shortcut starts until that exact request has
         // resolved so they cannot replace its mode or target.
@@ -603,6 +620,7 @@ class DictationService: ObservableObject {
                     self.stopTranscriptionTimer()
                     self.lastResult = result
                     var completionWarning = result.warning
+                    var clipboardFallbackText: String?
                     self.recordingDuration = 0
 
                     DictationStore.shared.add(
@@ -622,28 +640,21 @@ class DictationService: ObservableObject {
                         }
                         if AppSettings.shared.autoPasteAfterDictation {
                             if let pasteTarget {
-                                let outcome = AccessibilityService.shared.pasteTextWithOutcome(
-                                    result.polishedText,
-                                    expectedTarget: pasteTarget
-                                )
+                                let outcome = AccessibilityService.shared
+                                    .pasteTextPreservingClipboardWithOutcome(
+                                        result.polishedText,
+                                        expectedTarget: pasteTarget
+                                    )
                                 switch outcome {
                                 case .pasted:
                                     if case .smart = mode, result.warning != nil {
-                                        completionWarning = "Smart edit was unavailable. Raw dictation pasted and copied."
+                                        completionWarning = "Smart edit was unavailable. Raw dictation pasted."
                                     }
-                                case .copiedOnly(.targetChanged):
-                                    completionWarning = "Could not paste into \(pasteTarget.applicationName). Copied to clipboard."
-                                case .copiedOnly(.accessibilityDenied):
-                                    completionWarning = "Could not paste automatically. Copied to clipboard. Grant Accessibility access to enable auto-paste."
-                                case .copiedOnly(.eventUnavailable):
-                                    completionWarning = "Could not send Cmd+V. Copied to clipboard."
-                                case .copiedOnly(.clipboardUnavailable), .failed:
-                                    completionWarning = "Dictation saved, but clipboard copy failed. Copy it from History."
+                                case .failed:
+                                    clipboardFallbackText = result.polishedText
                                 }
-                            } else if AccessibilityService.shared.copyTextToClipboard(result.polishedText) {
-                                completionWarning = "Could not identify the paste destination. Copied to clipboard."
                             } else {
-                                completionWarning = "Dictation saved, but clipboard copy failed. Copy it from History."
+                                clipboardFallbackText = result.polishedText
                             }
                         }
                     case .command:
@@ -658,16 +669,20 @@ class DictationService: ObservableObject {
                     self.activeTranscriptionID = nil
                     self.clearActiveTranscriptionResources()
 
-                    self.state = completionWarning.map(State.error) ?? .done
-
-                    if completionWarning != nil {
-                        self.scheduleErrorDismissal()
+                    if let clipboardFallbackText {
+                        self.offerClipboardFallback(clipboardFallbackText)
                     } else {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                            Task { @MainActor [weak self] in
-                                guard let self else { return }
-                                if case .done = self.state {
-                                    self.state = .idle
+                        self.state = completionWarning.map(State.error) ?? .done
+
+                        if completionWarning != nil {
+                            self.scheduleErrorDismissal()
+                        } else {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                                Task { @MainActor [weak self] in
+                                    guard let self else { return }
+                                    if case .done = self.state {
+                                        self.state = .idle
+                                    }
                                 }
                             }
                         }
@@ -712,6 +727,132 @@ class DictationService: ObservableObject {
         case .handsFree: return .transcribingHandsFree
         case .command: return .transcribingCommand
         case .smart: return .transcribingSmart
+        }
+    }
+
+    // MARK: - Clipboard Fallback
+
+    /// A failed automatic paste never destroys an occupied clipboard. Empty
+    /// clipboards can accept the result immediately; otherwise the user gets a
+    /// short, explicit confirmation and the dictation remains in History.
+    private func offerClipboardFallback(_ text: String) {
+        clearPendingClipboardConfirmation()
+        let accessibility = AccessibilityService.shared
+        let observation = accessibility.clipboardObservation()
+
+        guard observation.hasContent else {
+            switch accessibility.replaceClipboardIfUnchanged(
+                text,
+                expectedChangeCount: observation.changeCount
+            ) {
+            case .copied:
+                showDeliveryNotice("Copied to clipboard · Paste with Cmd+V")
+            case .changed:
+                let refreshed = accessibility.clipboardObservation()
+                if refreshed.hasContent {
+                    presentClipboardConfirmation(text, observation: refreshed)
+                } else {
+                    showDeliveryNotice("Dictation saved in History")
+                }
+            case .unavailable:
+                showDeliveryNotice("Clipboard unavailable · Dictation saved")
+            }
+            return
+        }
+
+        presentClipboardConfirmation(text, observation: observation)
+    }
+
+    private func presentClipboardConfirmation(
+        _ text: String,
+        observation: ClipboardObservation
+    ) {
+        let request = PendingClipboardCopy(
+            id: UUID(),
+            text: text,
+            expectedChangeCount: observation.changeCount
+        )
+        pendingClipboardCopy = request
+
+        let returnKeyEnabled = KeyboardShortcutService.shared.beginClipboardConfirmation(
+            onConfirm: { [weak self] in
+                self?.confirmClipboardOverwrite(requestID: request.id)
+            },
+            onKeep: { [weak self] in
+                self?.keepExistingClipboard(requestID: request.id)
+            }
+        )
+        state = .clipboardConfirmation(returnKeyEnabled: returnKeyEnabled)
+
+        clipboardConfirmationTimer = Timer.scheduledTimer(
+            withTimeInterval: 8,
+            repeats: false
+        ) { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in
+                self?.keepExistingClipboard(requestID: request.id)
+            }
+        }
+    }
+
+    /// Called by Return or the visible Copy button.
+    func confirmClipboardOverwrite() {
+        guard let requestID = pendingClipboardCopy?.id else { return }
+        confirmClipboardOverwrite(requestID: requestID)
+    }
+
+    private func confirmClipboardOverwrite(requestID: UUID) {
+        guard let request = pendingClipboardCopy,
+              request.id == requestID else { return }
+
+        let outcome = AccessibilityService.shared.replaceClipboardIfUnchanged(
+            request.text,
+            expectedChangeCount: request.expectedChangeCount
+        )
+        clearPendingClipboardConfirmation()
+
+        switch outcome {
+        case .copied:
+            showDeliveryNotice("Copied to clipboard · Paste with Cmd+V")
+        case .changed:
+            showDeliveryNotice("Clipboard changed · Dictation saved in History")
+        case .unavailable:
+            showDeliveryNotice("Clipboard unavailable · Dictation saved")
+        }
+    }
+
+    /// Called by Escape, timeout, or the visible Keep button.
+    func keepExistingClipboard() {
+        guard let requestID = pendingClipboardCopy?.id else { return }
+        keepExistingClipboard(requestID: requestID)
+    }
+
+    private func keepExistingClipboard(requestID: UUID) {
+        guard pendingClipboardCopy?.id == requestID else { return }
+        clearPendingClipboardConfirmation()
+        showDeliveryNotice("Clipboard kept · Dictation saved in History")
+    }
+
+    private func clearPendingClipboardConfirmation() {
+        guard pendingClipboardCopy != nil || clipboardConfirmationTimer != nil else { return }
+        clipboardConfirmationTimer?.invalidate()
+        clipboardConfirmationTimer = nil
+        pendingClipboardCopy = nil
+        KeyboardShortcutService.shared.endClipboardConfirmation()
+    }
+
+    private func showDeliveryNotice(_ message: String) {
+        deliveryNoticeTimer?.invalidate()
+        state = .deliveryNotice(message)
+        deliveryNoticeTimer = Timer.scheduledTimer(
+            withTimeInterval: 1.6,
+            repeats: false
+        ) { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if case .deliveryNotice = self.state {
+                    self.state = .idle
+                }
+            }
         }
     }
 
@@ -805,6 +946,9 @@ class DictationService: ObservableObject {
         stopRecordingTimer()
         stopTranscriptionTimer()
         stopUndoTimer()
+        clearPendingClipboardConfirmation()
+        deliveryNoticeTimer?.invalidate()
+        deliveryNoticeTimer = nil
 
         activeTranscriptionID = nil
         transcriptionTask?.cancel()

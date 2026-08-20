@@ -27,8 +27,9 @@ a report. Use synthetic samples and redact logs.
 - Provider API keys can stay in a user-selected `.env` file. If a key is
   pasted or recovered, it is stored in macOS Keychain, not in source code,
   preferences, or the transcript database. Groq, OpenRouter, and OpenAI each
-  use one item across dictation and Cmd + E. ElevenLabs uses a dictation-only
-  item. Custom dictation and custom text use separate items.
+  use one item across dictation, Smart Dictation, and Cmd + E. ElevenLabs uses
+  one item for dictation and optional read-aloud. Custom dictation and custom
+  text use separate items.
 - Launching Vibe Read and opening Settings do not read Keychain. The app reads
   a saved key only after explicit verification or intentional provider use.
   A loaded key is cached in process memory until the app quits.
@@ -49,6 +50,13 @@ a report. Use synthetic samples and redact logs.
   needed.
 - Data sent to a configured AI provider leaves the local security boundary and
   is governed by that provider.
+- Normal Fn dictation never sends its transcript to the text provider. Smart
+  Dictation does. Its text request contains the raw transcript, the local Smart
+  prompt, and a sanitized app name only. It does not include selected text,
+  window titles, documents, screenshots, or screen contents.
+- ElevenLabs voice loading and preview are explicit actions. Voice metadata may
+  be cached in macOS preferences. Preview and read-aloud send entered text to
+  ElevenLabs and consume provider usage.
 - A stable bundle identifier and signing identity matter for macOS permissions
   and Keychain access. Anyone distributing a build should use their own bundle
   identifier, Developer ID identity, and notarization credentials. Ad hoc

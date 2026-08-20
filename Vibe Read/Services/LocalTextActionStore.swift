@@ -46,38 +46,90 @@ enum BuiltInPaletteAction: String, CaseIterable, Codable, Identifiable, Sendable
 final class LocalTextActionStore: ObservableObject {
     static let shared = LocalTextActionStore()
 
+    private let defaults: UserDefaults
     private let defaultsKey = "localTextActions.v1"
     private let builtInsKey = "localTextActions.builtIns.v1"
 
-    @Published var actions: [LocalTextAction] {
+    @Published private(set) var actions: [LocalTextAction] {
         didSet { persist() }
     }
-    @Published var enabledBuiltIns: Set<BuiltInPaletteAction> {
+    @Published private(set) var enabledBuiltIns: Set<BuiltInPaletteAction> {
         didSet { persistBuiltIns() }
     }
 
-    private init() {
-        if let data = UserDefaults.standard.data(forKey: defaultsKey),
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+
+        if let data = defaults.data(forKey: defaultsKey),
            let decoded = try? JSONDecoder().decode([LocalTextAction].self, from: data) {
-            actions = decoded
+            let sanitized = Self.sanitized(decoded)
+            actions = sanitized
+
+            // Older builds appended a placeholder immediately whenever Add
+            // Action was clicked. Collapse exact duplicates once on load so
+            // those accidental rows disappear without disturbing user order.
+            if sanitized != decoded,
+               let repairedData = try? JSONEncoder().encode(sanitized) {
+                defaults.set(repairedData, forKey: defaultsKey)
+            }
         } else {
             actions = Self.defaultActions
         }
-        if let values = UserDefaults.standard.array(forKey: builtInsKey) as? [String] {
+        if let values = defaults.array(forKey: builtInsKey) as? [String] {
             enabledBuiltIns = Set(values.compactMap(BuiltInPaletteAction.init(rawValue:)))
         } else {
             enabledBuiltIns = Set(BuiltInPaletteAction.allCases)
         }
     }
 
-    func add(name: String = "New action", prompt: String = "Rewrite the text clearly. Return only the rewritten text.") {
-        actions.append(LocalTextAction(name: name, prompt: prompt))
+    /// Returns an inline validation message suitable for the action editor.
+    func validationMessage(
+        name: String,
+        prompt: String,
+        excluding actionID: UUID? = nil
+    ) -> String? {
+        let name = Self.trimmed(name)
+        let prompt = Self.trimmed(prompt)
+
+        if name.isEmpty { return "Enter an action name." }
+        if prompt.isEmpty { return "Enter the instruction this action should follow." }
+
+        let duplicateExists = actions.contains { action in
+            action.id != actionID
+                && Self.trimmed(action.name) == name
+                && Self.trimmed(action.prompt) == prompt
+        }
+        if duplicateExists { return "An identical action already exists." }
+        return nil
     }
 
-    func remove(at offsets: IndexSet) {
-        for index in offsets.sorted(by: >) where actions.indices.contains(index) {
-            actions.remove(at: index)
+    /// Creates or updates an action without changing its position in the list.
+    @discardableResult
+    func save(id: UUID?, name: String, prompt: String) -> Bool {
+        guard validationMessage(name: name, prompt: prompt, excluding: id) == nil else {
+            return false
         }
+
+        let normalizedName = Self.trimmed(name)
+        let normalizedPrompt = Self.trimmed(prompt)
+
+        if let id {
+            guard let index = actions.firstIndex(where: { $0.id == id }) else {
+                return false
+            }
+            actions[index] = LocalTextAction(
+                id: id,
+                name: normalizedName,
+                prompt: normalizedPrompt
+            )
+        } else {
+            actions.append(LocalTextAction(name: normalizedName, prompt: normalizedPrompt))
+        }
+        return true
+    }
+
+    func remove(id: UUID) {
+        actions.removeAll { $0.id == id }
     }
 
     func reset() {
@@ -96,11 +148,37 @@ final class LocalTextActionStore: ObservableObject {
 
     private func persist() {
         guard let data = try? JSONEncoder().encode(actions) else { return }
-        UserDefaults.standard.set(data, forKey: defaultsKey)
+        defaults.set(data, forKey: defaultsKey)
     }
 
     private func persistBuiltIns() {
-        UserDefaults.standard.set(enabledBuiltIns.map(\.rawValue).sorted(), forKey: builtInsKey)
+        defaults.set(enabledBuiltIns.map(\.rawValue).sorted(), forKey: builtInsKey)
+    }
+
+    private static func sanitized(_ source: [LocalTextAction]) -> [LocalTextAction] {
+        var seen = Set<ActionIdentity>()
+        var result: [LocalTextAction] = []
+
+        for action in source {
+            let name = trimmed(action.name)
+            let prompt = trimmed(action.prompt)
+            guard !name.isEmpty, !prompt.isEmpty else { continue }
+
+            let identity = ActionIdentity(name: name, prompt: prompt)
+            guard seen.insert(identity).inserted else { continue }
+
+            result.append(LocalTextAction(id: action.id, name: name, prompt: prompt))
+        }
+        return result
+    }
+
+    private static func trimmed(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private struct ActionIdentity: Hashable {
+        let name: String
+        let prompt: String
     }
 
     static let defaultActions = [

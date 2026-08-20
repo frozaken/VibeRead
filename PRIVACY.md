@@ -9,20 +9,23 @@ document describes the current app's data flow.
 - Transcript history is stored in a SQLite database under the user's
   Application Support directory and remains until the user deletes it. Each
   successful row stores the provider transcript and the final text used by the
-  app. They are identical unless a custom cleanup prompt changes the text.
+  app. They are identical for normal dictation. Smart Dictation can change the
+  final text.
 - Dictation recordings are stored beside that database and deleted after seven
   days by default. The user can choose immediate, one-day, seven-day, 30-day,
   or indefinite retention.
 - Saved text, extracted pages, summaries, and bookmarks are stored in
   `library.json` under the same local Application Support directory.
 - Shortcuts, provider choices, provider URL and model identifiers, dictation
-  language, vocabulary, retention choice, and user-defined action prompts are
-  stored in macOS preferences.
+  language, vocabulary, retention choice, Smart Dictation prompt, and
+  user-defined action prompts are stored in macOS preferences. The selected
+  ElevenLabs voice, cached voice metadata, and the editable voice preview
+  phrase can also be stored there.
 - API keys can remain in a user-selected `.env` file. Pasted or recovered keys
   are stored in macOS Keychain. Groq, OpenRouter, and OpenAI each use one
-  provider credential that can power dictation and Cmd + E. ElevenLabs uses
-  one credential for dictation and optional read-aloud. Custom dictation and
-  custom text actions use separate credentials.
+  provider credential that can power dictation, Smart Dictation, and Cmd + E.
+  ElevenLabs uses one credential for dictation and optional read-aloud. Custom
+  dictation and custom text actions use separate credentials.
 
 Launching Vibe Read and opening Settings do not read Keychain. The app reads a
 saved Keychain item only after the user explicitly verifies it or intentionally
@@ -43,9 +46,10 @@ rest.
 
 ## Sent over the network
 
-Vibe Read contacts a configured provider when the user starts dictation, runs
-a provider-backed text action, uses a custom dictation cleanup mode, or asks
-the app to verify provider access.
+Vibe Read contacts a configured provider when the user finishes dictation,
+runs a provider-backed text action, explicitly loads or previews an ElevenLabs
+voice, asks for ElevenLabs read-aloud, or asks the app to verify provider
+access.
 
 ### Dictation
 
@@ -70,10 +74,17 @@ locally.
 
 ### Text processing
 
-A custom dictation cleanup prompt sends the raw transcript, the prompt, and the
-selected text model to the separately configured text provider. If cleanup
-fails, Vibe Read keeps and uses the raw transcript instead of discarding a
-successful dictation.
+Normal Fn dictation does not contact the configured text provider. It uses the
+raw transcript returned by the dictation provider.
+
+Smart Dictation is a separate mode with a separate shortcut. It first uses the
+configured dictation provider, then sends the raw transcript, the locally
+stored Smart Dictation prompt, and the sanitized name of the app where
+dictation began to the configured text provider. The app name is limited to 80
+characters and control characters are removed. This request does not include
+selected text, window titles, document contents, screenshots, or other screen
+context. If editing fails, Vibe Read keeps and uses the raw transcript instead
+of discarding a successful dictation.
 
 A provider-backed Cmd + E action sends the selected text, action prompt, and
 selected model to the text provider configured for Cmd + E. Its response
@@ -107,16 +118,18 @@ The app's provider client disables URL caching and cookies for these requests.
 This does not control what a provider retains after receiving a request.
 
 Read-aloud uses the macOS speech synthesizer locally by default. When the user
-selects ElevenLabs read-aloud and presses Read or Preview, the chosen text is
-sent directly to ElevenLabs and generated audio is returned to the Mac.
-Choosing Load My Voices makes a direct authenticated voice-list request but
-does not send reading text.
+selects ElevenLabs read-aloud and presses Read or Preview, the chosen reading
+text or entered preview phrase is sent directly to ElevenLabs and generated
+audio is returned to the Mac. These requests count toward the user's provider
+usage. Choosing Load Voices makes a direct authenticated voice-list request but
+does not send reading text. Returned voice metadata may be cached in macOS
+preferences, and searching the voice list is local.
 
 Saving or reading a copied web address fetches that page directly from the
 Mac. YouTube support requests public metadata and captions. Vibe Read does not
 use AppleScript, browser automation, or a Vibe Read proxy for these workflows.
-Copying, pasting, opening the action palette, and editing action definitions do
-not by themselves send a network request.
+Copying, pasting, opening the action palette, and adding, editing, or deleting
+action definitions do not by themselves send a network request.
 
 ## Not included
 

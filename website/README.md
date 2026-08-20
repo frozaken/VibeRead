@@ -1,8 +1,8 @@
 # Vibe Read website
 
 The static landing page for Vibe Read, a free and open source Mac app for
-voice dictation, reading selected text aloud, and configurable Cmd + E
-actions.
+fast voice dictation, optional Smart Dictation, reading selected text aloud,
+and configurable Cmd + E actions.
 
 ## App setup
 
@@ -53,13 +53,20 @@ recordings as soon as their result is recorded.
 
 The desktop app connects directly to the providers configured by the user.
 Dictation can use ElevenLabs, Groq, OpenRouter, OpenAI, or a custom
-OpenAI-compatible endpoint. Cmd + E and custom dictation cleanup can use a
+OpenAI-compatible endpoint. Normal Fn dictation never invokes the text
+provider. Smart Dictation and provider-backed Cmd + E actions can use a
 separate OpenRouter, Groq, OpenAI, or custom provider. Remote providers receive
 audio or text only when the user asks them to process it, and each provider
 applies its own terms and retention policy.
 
+Smart Dictation sends the raw transcript, the local Smart prompt, and a
+sanitized original app name to the text provider. It does not send selected
+text, window titles, screenshots, or document contents. If the edit fails, the
+raw transcript is preserved.
+
 Provider keys can stay in a chosen `.env` file or be stored in macOS Keychain. Groq, OpenRouter, and OpenAI can
-each use one key across dictation and Cmd + E. ElevenLabs is dictation-only.
+each use one key across dictation, Smart Dictation, and Cmd + E. ElevenLabs
+can power dictation and optional read-aloud.
 Custom dictation and custom text use separate keys and endpoint URLs. Keys are
 never part of this static website. Users can also configure a compatible
 service running on their Mac.
@@ -73,3 +80,9 @@ they want to use.
 Vibe Read does not show system permission prompts at startup. macOS access is
 requested only after the user clicks Grant Access or intentionally uses a
 feature that needs it.
+
+ElevenLabs voices load only after an explicit action. Voice metadata may be
+cached locally. Preview and read-aloud send the entered text to ElevenLabs and
+use the user's provider credits. Custom Cmd + E actions can be added, edited,
+or deleted in the app. Exact duplicates left by older builds are repaired on
+load.

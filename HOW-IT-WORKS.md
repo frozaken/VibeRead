@@ -19,16 +19,18 @@ Recovery is noninteractive and never opens a macOS password prompt.
 The other provider and model controls are optional. They exist for people who
 want Groq, OpenRouter, OpenAI, or a compatible service running locally.
 
-Dictation and Cmd + E are configured independently.
+Dictation and text processing are configured independently. Normal Fn
+dictation uses only the dictation provider. Smart Dictation and
+provider-backed Cmd + E actions use the text provider.
 
 | Feature | Built-in choices | What can be selected |
 | --- | --- | --- |
 | Dictation | ElevenLabs, Groq, OpenRouter, OpenAI, Custom OpenAI-compatible | Provider, transcription model where supported, and language or auto detect |
-| Cmd + E and custom dictation cleanup | OpenRouter, Groq, OpenAI, Custom OpenAI-compatible | Provider and text model |
+| Smart Dictation and Cmd + E | OpenRouter, Groq, OpenAI, Custom OpenAI-compatible | Provider and text model |
 
 Each provider credential can stay in a user-selected `.env` file or be saved
 in macOS Keychain. If Groq, OpenRouter, or OpenAI is selected for both dictation
-and Cmd + E, both features use that provider's credential. ElevenLabs can power both Scribe
+and text processing, both features use that provider's credential. ElevenLabs can power both Scribe
 dictation and optional ElevenLabs read-aloud. Custom
 dictation and custom text actions have separate endpoint URLs and credentials.
 Provider choices, model identifiers, language, `.env` file paths, and custom endpoint URLs
@@ -36,7 +38,7 @@ are non-secret preferences stored by macOS.
 
 Launching Vibe Read and opening Settings do not read Keychain or a selected
 `.env` file. The app reads a credential only after the user explicitly verifies
-it or intentionally uses that provider for dictation, cleanup, or a text action.
+it or intentionally uses that provider for dictation, Smart Dictation, or a text action.
 Keychain values are cached in memory until the app quits. Older generic provider keys
 are not automatically discovered or migrated. Users must re-enter an older key
 for the provider they want to use and choose its explicit save action.
@@ -51,16 +53,21 @@ configured without an API key.
 2. When recording stops, Vibe Read sends that audio directly from the Mac to
    the dictation provider selected in Settings.
 3. The provider returns a raw transcript.
-4. The default dictation mode uses that transcript as-is. If the active mode
-   has a custom cleanup prompt, Vibe Read sends the raw transcript and prompt
-   to the separately configured text provider.
-5. If cleanup succeeds, its response becomes the final text. If cleanup fails,
-   Vibe Read keeps the successful raw transcript as the final text and reports
-   a nonfatal warning.
-6. Vibe Read saves the raw transcript and final text to a local SQLite
+4. Normal Fn dictation uses that transcript as-is. It does not call the text
+   provider.
+5. Smart Dictation, started with Fn + Option by default, sends the raw
+   transcript to the configured text provider together with the locally stored
+   Smart prompt and a sanitized name of the app where recording began. The app
+   name is limited to 80 characters and control characters are removed. Vibe
+   Read does not send selected text, window titles, documents, screenshots, or
+   screen contents with this request.
+6. If the Smart edit succeeds, its response becomes the final text. If it
+   fails, Vibe Read keeps the successful raw transcript as the final text and
+   reports a nonfatal warning.
+7. Vibe Read saves the raw transcript and final text to a local SQLite
    database. It can insert the final text into another app through macOS
    Accessibility.
-7. The retained recording is stored under Application Support. Audio is
+8. The retained recording is stored under Application Support. Audio is
    deleted after seven days by default. Transcript text remains until the user
    deletes it.
 
@@ -72,8 +79,12 @@ the configured providers.
 Read-aloud has two explicit modes. The macOS mode uses `AVSpeechSynthesizer`
 and keeps text on the Mac. The ElevenLabs mode sends only the text the user
 chooses to read directly to ElevenLabs, downloads generated audio, and plays it
-locally. Voice loading, preview, and reading are explicit actions and are the
-only times read-aloud accesses the saved ElevenLabs key.
+locally. **Load Voices** is an explicit authenticated request. Its voice
+metadata may be cached in macOS preferences so the picker can reopen without a
+background request. Search runs on that local list. Preview sends the phrase
+entered in Settings to ElevenLabs and uses provider credits, just like normal
+ElevenLabs read-aloud. Voice loading, preview, and reading are the only times
+read-aloud accesses the ElevenLabs credential.
 
 ## Text actions
 
@@ -84,8 +95,12 @@ provider configured for Cmd + E. The result stays in the palette for review.
 The user can copy it, cancel it, or explicitly apply it. The text provider is
 optional, so local actions remain available without one.
 
-Action definitions and shortcuts are stored in macOS preferences. Selected
-text is not added to dictation history.
+The Actions screen provides an in-app sheet for adding, editing, and deleting
+custom actions. It validates the name and prompt before saving. Action
+definitions and shortcuts are stored in macOS preferences. When Vibe Read loads
+actions created by an older version, it removes exact name-and-prompt
+duplicates while preserving the first copy and its order. Selected text is not
+added to dictation history.
 
 When the current selection or clipboard contains a web address, Cmd + E can
 extract a readable article or Wikipedia page, or use public YouTube captions.
@@ -96,10 +111,13 @@ Application Support directory.
 ## Storage and network boundary
 
 ```text
+Normal Fn:
 Microphone -> selected dictation provider -> raw transcript -> local SQLite
-                                                     |
-                                                     +-> optional cleanup
-                                                         text provider
+
+Smart Fn + Option:
+Microphone -> dictation provider -> raw transcript + local Smart prompt
+                                      + sanitized target app name
+                                   -> text provider -> local SQLite
 
 Selected text -> optional Cmd + E text provider -> preview -> explicit apply
 Text to read  -> macOS speech synthesizer or chosen ElevenLabs voice

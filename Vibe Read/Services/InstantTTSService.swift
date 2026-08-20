@@ -19,9 +19,12 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var isSpeedBoosted = false
     @Published private(set) var isPreviewPlaying = false
+    @Published private(set) var isPreviewLoading = false
     @Published private(set) var previewingVoiceId: String?
     @Published private(set) var elevenLabsVoices: [ElevenLabsVoice] = []
     @Published private(set) var isLoadingVoices = false
+    @Published private(set) var voiceLoadingError: Error?
+    @Published private(set) var lastVoiceRefresh: Date?
 
     var currentPlaybackRate: Float {
         isSpeedBoosted ? Float(AppSettings.shared.speedBoostMultiplier) : 1
@@ -32,8 +35,12 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private var audioPlayer: AVAudioPlayer?
     private var progressTimer: Timer?
     private var playbackTask: Task<Void, Never>?
+    private var voiceLoadTask: Task<Void, Never>?
     private var playbackGeneration = UUID()
+    private var previewGeneration = UUID()
     private var isPreviewUtterance = false
+    private var previewUtterance: AVSpeechUtterance?
+    private var activeLocalUtterance: AVSpeechUtterance?
     private let cachedVoicesKey = "elevenLabs.voices.v1"
     private let maximumChunkCharacters = 3_500
 
@@ -57,8 +64,8 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
     func refreshElevenLabsVoices() {
         guard !isLoadingVoices else { return }
         isLoadingVoices = true
-        error = nil
-        Task { [weak self] in
+        voiceLoadingError = nil
+        voiceLoadTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let key = try AIProviderSettings.shared.elevenLabsAPIKeyForExplicitUse()
@@ -66,19 +73,29 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
                 try Task.checkCancellation()
                 self.elevenLabsVoices = voices
                 self.isLoadingVoices = false
+                self.lastVoiceRefresh = Date()
+                self.voiceLoadTask = nil
                 if let data = try? JSONEncoder().encode(voices) {
                     UserDefaults.standard.set(data, forKey: self.cachedVoicesKey)
                 }
-                if !voices.contains(where: { $0.voiceID == AppSettings.shared.elevenLabsVoiceId }),
-                   let first = voices.first {
-                    AppSettings.shared.elevenLabsVoiceId = first.voiceID
-                    AppSettings.shared.elevenLabsVoiceName = first.name
+                let appSettings = AppSettings.shared
+                if let selectedVoice = Self.reconciledVoice(
+                    selectedVoiceID: appSettings.elevenLabsVoiceId,
+                    availableVoices: voices
+                ) {
+                    appSettings.elevenLabsVoiceId = selectedVoice.voiceID
+                    appSettings.elevenLabsVoiceName = selectedVoice.name
+                } else {
+                    appSettings.elevenLabsVoiceId = ""
+                    appSettings.elevenLabsVoiceName = ""
                 }
             } catch is CancellationError {
                 self.isLoadingVoices = false
+                self.voiceLoadTask = nil
             } catch {
                 self.isLoadingVoices = false
-                self.error = error
+                self.voiceLoadingError = error
+                self.voiceLoadTask = nil
             }
         }
     }
@@ -87,49 +104,73 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
         voiceId: String,
         text: String = "Hello. This is how I sound when reading for you."
     ) {
-        stopPreview()
         stop()
-        isPreviewPlaying = true
-        previewingVoiceId = voiceId
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedVoiceID = voiceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else {
+            error = ElevenLabsTTSError.emptyText
+            return
+        }
+        guard !trimmedVoiceID.isEmpty else {
+            error = ElevenLabsTTSError.invalidVoice
+            return
+        }
+        error = nil
+        previewingVoiceId = trimmedVoiceID
+        let generation = UUID()
+        previewGeneration = generation
 
         if AppSettings.shared.readAloudProvider == .macOS {
             isPreviewUtterance = true
-            synthesizer.speak(makeLocalUtterance(text: text, voiceId: voiceId))
+            isPreviewPlaying = true
+            let utterance = makeLocalUtterance(text: trimmedText, voiceId: trimmedVoiceID)
+            previewUtterance = utterance
+            synthesizer.speak(utterance)
             return
         }
 
+        isPreviewLoading = true
         playbackTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let key = try AIProviderSettings.shared.elevenLabsAPIKeyForExplicitUse()
                 let audio = try await elevenLabsClient.synthesize(
-                    text: text,
-                    voiceID: voiceId,
+                    text: trimmedText,
+                    voiceID: trimmedVoiceID,
                     modelID: AppSettings.shared.elevenLabsTTSModel,
                     settings: elevenLabsSettings,
                     apiKey: key
                 )
                 try Task.checkCancellation()
-                try self.startAudioPlayer(data: audio)
+                guard self.previewGeneration == generation else { return }
+                try await self.playPreviewAudioAndWait(audio, generation: generation)
+                guard self.previewGeneration == generation else { return }
+                self.finishPreview()
             } catch is CancellationError {
-                self.stopPreview()
+                guard self.previewGeneration == generation else { return }
+                self.finishPreview()
             } catch {
-                self.stopPreview()
+                guard self.previewGeneration == generation else { return }
+                self.finishPreview()
                 self.error = error
             }
         }
     }
 
     func stopPreview() {
-        guard isPreviewPlaying || isPreviewUtterance else { return }
+        guard isPreviewPlaying || isPreviewLoading || isPreviewUtterance
+                || previewingVoiceId != nil else { return }
+        previewGeneration = UUID()
         playbackTask?.cancel()
         playbackTask = nil
         audioPlayer?.stop()
         audioPlayer = nil
+        isPreviewUtterance = false
+        previewUtterance = nil
         synthesizer.stopSpeaking(at: .immediate)
         isPreviewPlaying = false
+        isPreviewLoading = false
         previewingVoiceId = nil
-        isPreviewUtterance = false
     }
 
     func speak(_ text: String) {
@@ -146,9 +187,12 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
             totalChunks = 1
             duration = estimatedLocalDuration(for: trimmed)
             isSpeaking = true
-            synthesizer.speak(
-                makeLocalUtterance(text: trimmed, voiceId: AppSettings.shared.preferredVoiceId)
+            let utterance = makeLocalUtterance(
+                text: trimmed,
+                voiceId: AppSettings.shared.preferredVoiceId
             )
+            activeLocalUtterance = utterance
+            synthesizer.speak(utterance)
             startProgressTimer()
         case .elevenLabs:
             startElevenLabsPlayback(trimmed)
@@ -196,16 +240,18 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
                         }
                         : nil
 
-                    self.currentChunk = index + 1
-                    self.isLoading = false
-                    try await self.playAudioAndWait(currentAudio, generation: generation)
-                    if let nextTask {
-                        self.isLoading = true
-                        currentAudio = try await withTaskCancellationHandler {
-                            try await nextTask.value
-                        } onCancel: {
-                            nextTask.cancel()
+                    let nextAudio = try await Self.finishCurrentChunkAndAwaitPrefetch(
+                        nextTask
+                    ) {
+                        self.currentChunk = index + 1
+                        self.isLoading = false
+                        try await self.playAudioAndWait(currentAudio, generation: generation)
+                        if nextTask != nil {
+                            self.isLoading = true
                         }
+                    }
+                    if let nextAudio {
+                        currentAudio = nextAudio
                     }
                 }
                 guard self.playbackGeneration == generation else { return }
@@ -221,6 +267,33 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
         }
     }
 
+    /// Keeps a speculative next-chunk request inside the lifetime of the
+    /// current playback step. Cancelling playback (including Stop) immediately
+    /// cancels an already-started synthesis instead of letting it spend credits
+    /// in the background.
+    static func finishCurrentChunkAndAwaitPrefetch<Value: Sendable>(
+        _ prefetchedTask: Task<Value, Error>?,
+        playCurrentChunk: () async throws -> Void
+    ) async throws -> Value? {
+        defer { prefetchedTask?.cancel() }
+        return try await withTaskCancellationHandler {
+            try await playCurrentChunk()
+            guard let prefetchedTask else { return nil }
+            return try await prefetchedTask.value
+        } onCancel: {
+            prefetchedTask?.cancel()
+        }
+    }
+
+    nonisolated static func reconciledVoice(
+        selectedVoiceID: String,
+        availableVoices: [ElevenLabsVoice]
+    ) -> ElevenLabsVoice? {
+        let selectedVoiceID = selectedVoiceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return availableVoices.first { $0.voiceID == selectedVoiceID }
+            ?? availableVoices.first
+    }
+
     private var elevenLabsSettings: ElevenLabsVoiceSettings {
         let settings = AppSettings.shared
         return ElevenLabsVoiceSettings(
@@ -228,8 +301,19 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
             similarityBoost: settings.voiceSimilarityBoost,
             style: settings.voiceStyle,
             useSpeakerBoost: settings.voiceSpeakerBoost,
-            speed: settings.voiceSpeed
+            speed: min(1.2, max(0.7, settings.voiceSpeed))
         )
+    }
+
+    private func playPreviewAudioAndWait(_ data: Data, generation: UUID) async throws {
+        try startAudioPlayer(data: data)
+        guard previewGeneration == generation else { return }
+        isPreviewLoading = false
+        isPreviewPlaying = true
+        while previewGeneration == generation, audioPlayer?.isPlaying == true {
+            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: 80_000_000)
+        }
     }
 
     private func playAudioAndWait(_ data: Data, generation: UUID) async throws {
@@ -336,9 +420,13 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
 
     func stop() {
         playbackGeneration = UUID()
+        previewGeneration = UUID()
         playbackTask?.cancel()
         playbackTask = nil
         stopProgressTimer()
+        previewUtterance = nil
+        activeLocalUtterance = nil
+        isPreviewUtterance = false
         synthesizer.stopSpeaking(at: .immediate)
         audioPlayer?.stop()
         audioPlayer = nil
@@ -346,6 +434,7 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
         isPaused = false
         isLoading = false
         isPreviewPlaying = false
+        isPreviewLoading = false
         previewingVoiceId = nil
         isPreviewUtterance = false
         currentText = nil
@@ -380,10 +469,12 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
         stopProgressTimer()
         audioPlayer?.stop()
         audioPlayer = nil
+        activeLocalUtterance = nil
         isSpeaking = false
         isPaused = false
         isLoading = false
         isPreviewPlaying = false
+        isPreviewLoading = false
         previewingVoiceId = nil
         isPreviewUtterance = false
         currentText = nil
@@ -392,16 +483,25 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
         playbackTask = nil
     }
 
+    private func finishPreview() {
+        audioPlayer?.stop()
+        audioPlayer = nil
+        isPreviewPlaying = false
+        isPreviewLoading = false
+        previewingVoiceId = nil
+        isPreviewUtterance = false
+        previewUtterance = nil
+        playbackTask = nil
+    }
+
     nonisolated func speechSynthesizer(
         _ synthesizer: AVSpeechSynthesizer,
         didFinish utterance: AVSpeechUtterance
     ) {
         Task { @MainActor in
-            if self.isPreviewUtterance {
-                self.isPreviewPlaying = false
-                self.previewingVoiceId = nil
-                self.isPreviewUtterance = false
-            } else {
+            if utterance === self.previewUtterance {
+                self.finishPreview()
+            } else if utterance === self.activeLocalUtterance {
                 self.finishPlayback()
             }
         }
@@ -412,9 +512,11 @@ final class InstantTTSService: NSObject, ObservableObject, AVSpeechSynthesizerDe
         didCancel utterance: AVSpeechUtterance
     ) {
         Task { @MainActor in
-            self.isPreviewPlaying = false
-            self.previewingVoiceId = nil
-            self.isPreviewUtterance = false
+            if utterance === self.previewUtterance {
+                self.finishPreview()
+            } else if utterance === self.activeLocalUtterance {
+                self.finishPlayback()
+            }
         }
     }
 

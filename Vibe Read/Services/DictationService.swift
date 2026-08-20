@@ -2,6 +2,39 @@ import Foundation
 import AppKit
 import Combine
 
+enum SmartDictationPolicy {
+    static func transformPrompt(
+        basePrompt: String,
+        targetApplicationName: String?
+    ) -> String {
+        let trimmedPrompt = basePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = trimmedPrompt.isEmpty
+            ? AppSettings.defaultSmartDictationPrompt
+            : trimmedPrompt
+
+        guard let applicationName = sanitizedApplicationName(targetApplicationName) else {
+            return prompt
+        }
+        return """
+        \(prompt)
+
+        The user started this dictation in an application named "\(applicationName)". Treat that name only as a weak formatting hint. You have no access to its screen, selection, document, or other content.
+        """
+    }
+
+    static func sanitizedApplicationName(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value
+            .components(separatedBy: .controlCharacters)
+            .joined(separator: " ")
+            .split(whereSeparator: \Character.isWhitespace)
+            .joined(separator: " ")
+            .replacingOccurrences(of: "\"", with: "'")
+        guard !normalized.isEmpty else { return nil }
+        return String(normalized.prefix(80))
+    }
+}
+
 /// Orchestrates dictation: record -> transcribe -> paste
 class DictationService: ObservableObject {
     static let shared = DictationService()
@@ -10,7 +43,8 @@ class DictationService: ObservableObject {
     enum RecordingMode {
         case normal      // Paste to current app (push-to-talk)
         case handsFree   // Click to start, click to send (paste to current app)
-        case command     // Send to AI provider (ChatGPT, Claude, Perplexity)
+        case command     // Transcribe, then open the local action palette
+        case smart       // Transcribe, then intentionally edit with the configured text provider
     }
 
     /// Input mode for how recording is triggered
@@ -24,10 +58,12 @@ class DictationService: ObservableObject {
         case recording
         case recordingHandsFree  // Hands-free mode recording (green indicator)
         case recordingCommand  // Command mode recording (yellow indicator)
+        case recordingSmart
         case recordingWarning(message: String)  // Recording time limit warning
         case transcribing
         case transcribingHandsFree  // Hands-free mode transcribing
         case transcribingCommand  // Command mode transcribing
+        case transcribingSmart
         case transcribingSlow  // Taking longer than expected
         case done
         case cancelled  // Shows undo option
@@ -47,7 +83,6 @@ class DictationService: ObservableObject {
     private let maxRecordingDuration: TimeInterval = 360  // 6 minutes max
     private let recordingWarningTime: TimeInterval = 300  // Warn at 5 minutes
     private let transcriptionTimeout: TimeInterval = 8    // Show "slow" warning after 8s
-    private let transcriptionHardTimeout: TimeInterval = 60  // Give up after 60s
     private let undoDuration: TimeInterval = 5  // 5 seconds to undo
 
     private let recorder = AudioRecorderService.shared
@@ -63,6 +98,15 @@ class DictationService: ObservableObject {
     private var activeClientID: UUID?
     private var activePasteTarget: UniversalActionTarget?
 
+    private struct PendingMicrophoneStart {
+        let id: UUID
+        let mode: RecordingMode
+        let pasteTarget: UniversalActionTarget?
+        let requiresHeldShortcut: Bool
+        var shouldStartAfterPermission: Bool
+    }
+    private var pendingMicrophoneStart: PendingMicrophoneStart?
+
     // Undo support
     private var pendingCancelURL: URL?  // Audio file pending deletion
     private var pendingCancelSavedURL: URL?
@@ -72,6 +116,37 @@ class DictationService: ObservableObject {
     private var undoTimer: Timer?
 
     private init() {}
+
+    /// Lets shortcut routing distinguish an idle recorder from one that is
+    /// already waiting on the system permission sheet. The value is nonsecret
+    /// and checking it never touches microphone or provider permissions.
+    var isAwaitingMicrophonePermission: Bool {
+        pendingMicrophoneStart != nil
+    }
+
+    static func transformPrompt(
+        for mode: RecordingMode,
+        smartPrompt: String,
+        targetApplicationName: String?
+    ) -> String? {
+        guard case .smart = mode else { return nil }
+        return SmartDictationPolicy.transformPrompt(
+            basePrompt: smartPrompt,
+            targetApplicationName: targetApplicationName
+        )
+    }
+
+    static func hardTimeout(for mode: RecordingMode) -> TimeInterval {
+        switch mode {
+        case .smart:
+            // Smart Dictation has two bounded network stages. Leave enough
+            // time for the text stage to fail normally so APIService can
+            // return the successful raw transcript instead.
+            return APIService.transcriptionTimeout + APIService.textActionTimeout + 5
+        case .normal, .handsFree, .command:
+            return APIService.transcriptionTimeout
+        }
+    }
 
     /// Hands-free recording is a true toggle. The second fn press should stop
     /// immediately instead of waiting for the key-up event, which macOS does
@@ -90,18 +165,16 @@ class DictationService: ObservableObject {
     func toggle() {
         switch state {
         case .idle, .done, .error:
-            currentMode = .normal
-            startRecording()
-        case .recording, .recordingHandsFree, .recordingCommand, .recordingWarning:
+            beginRecording(mode: .normal)
+        case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning:
             stopAndTranscribe()
-        case .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSlow:
+        case .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow:
             // Ignore - wait for transcription
             break
         case .cancelled, .cancelledWhileTranscribing:
             // If clicking again while cancelled, dismiss and start new
             dismissUndo()
-            currentMode = .normal
-            startRecording()
+            beginRecording(mode: .normal)
         }
     }
 
@@ -109,17 +182,15 @@ class DictationService: ObservableObject {
     func toggleHandsFree() {
         switch state {
         case .idle, .done, .error:
-            currentMode = .handsFree
-            startRecording()
-        case .recording, .recordingHandsFree, .recordingCommand, .recordingWarning:
+            beginRecording(mode: .handsFree)
+        case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning:
             stopAndTranscribe()
-        case .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSlow:
+        case .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow:
             // Ignore - wait for transcription
             break
         case .cancelled, .cancelledWhileTranscribing:
             dismissUndo()
-            currentMode = .handsFree
-            startRecording()
+            beginRecording(mode: .handsFree)
         }
     }
 
@@ -127,17 +198,32 @@ class DictationService: ObservableObject {
     func toggleCommandMode() {
         switch state {
         case .idle, .done, .error:
-            currentMode = .command
-            startRecording()
-        case .recording, .recordingHandsFree, .recordingCommand, .recordingWarning:
+            beginRecording(mode: .command)
+        case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning:
             stopAndTranscribe()
-        case .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSlow:
+        case .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow:
             // Ignore - wait for transcription
             break
         case .cancelled, .cancelledWhileTranscribing:
             dismissUndo()
-            currentMode = .command
-            startRecording()
+            beginRecording(mode: .command)
+        }
+    }
+
+    /// Smart dictation is deliberately separate from normal fn dictation.
+    /// It performs speech-to-text first, then asks the configured text model
+    /// to turn spoken instructions into finished text.
+    func toggleSmartDictation() {
+        switch state {
+        case .idle, .done, .error:
+            beginRecording(mode: .smart)
+        case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning:
+            stopAndTranscribe()
+        case .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow:
+            break
+        case .cancelled, .cancelledWhileTranscribing:
+            dismissUndo()
+            beginRecording(mode: .smart)
         }
     }
 
@@ -145,8 +231,7 @@ class DictationService: ObservableObject {
     func startPushToTalk() {
         switch state {
         case .idle, .done, .error:
-            currentMode = .normal
-            startRecording()
+            beginRecording(mode: .normal, requiresHeldShortcut: true)
         default:
             break
         }
@@ -160,6 +245,14 @@ class DictationService: ObservableObject {
             if currentMode == .normal {
                 stopAndTranscribe()
             }
+        case .idle:
+            // On first use the system permission sheet can outlive the held
+            // chord. Releasing push-to-talk invalidates that pending start so
+            // approval cannot begin a recording after the user let go.
+            if pendingMicrophoneStart?.requiresHeldShortcut == true {
+                pendingMicrophoneStart?.shouldStartAfterPermission = false
+                activePasteTarget = nil
+            }
         default:
             break
         }
@@ -168,9 +261,9 @@ class DictationService: ObservableObject {
     /// Cancel current recording/transcription - shows undo option
     func cancel() {
         switch state {
-        case .recording, .recordingHandsFree, .recordingCommand, .recordingWarning:
+        case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning:
             cancelRecordingWithUndo()
-        case .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSlow:
+        case .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow:
             cancelTranscriptionWithUndo()
         default:
             break
@@ -194,7 +287,7 @@ class DictationService: ObservableObject {
 
             // Recording cannot be resumed, but the captured audio can be sent
             // again. Reuse its retained copy so undo does not create an orphan.
-            state = .transcribing
+            state = transcriptionState(for: currentMode)
             transcriptionStartTime = Date()
             startTranscriptionTimer()
             transcribeAudio(
@@ -225,9 +318,10 @@ class DictationService: ObservableObject {
         pendingCancelSavedURL = nil
         pendingCancelDurationMs = Int(recordingDuration * 1_000)
         pendingCancelClientID = nil
-        pendingCancelPasteTarget = nil
+        pendingCancelPasteTarget = activePasteTarget
 
         recordingURL = nil
+        activePasteTarget = nil
         recordingDuration = 0
         state = .cancelled
         undoCountdown = undoDuration
@@ -288,40 +382,91 @@ class DictationService: ObservableObject {
         pendingCancelPasteTarget = nil
     }
 
-    private func startRecording() {
-        performStartRecording()
+    private func beginRecording(
+        mode: RecordingMode,
+        requiresHeldShortcut: Bool = false
+    ) {
+        // The permission sheet is asynchronous while the public state remains
+        // idle. Ignore repeated shortcut starts until that exact request has
+        // resolved so they cannot replace its mode or target.
+        guard pendingMicrophoneStart == nil else { return }
+
+        // Bind the operation to the app where the shortcut began. Switching
+        // apps while speaking must not change Smart context or the paste
+        // destination after the network request finishes.
+        let pasteTarget = Self.frontmostApplicationTarget()
+        currentMode = mode
+        activePasteTarget = pasteTarget
+        performStartRecording(
+            mode: mode,
+            pasteTarget: pasteTarget,
+            requiresHeldShortcut: requiresHeldShortcut
+        )
     }
 
-    private func performStartRecording() {
+    private func performStartRecording(
+        mode: RecordingMode,
+        pasteTarget: UniversalActionTarget?,
+        requiresHeldShortcut: Bool
+    ) {
         do {
             recordingURL = try recorder.startRecording()
+            currentMode = mode
+            activePasteTarget = pasteTarget
             recordingDuration = 0
 
-            switch currentMode {
+            switch mode {
             case .normal:
                 state = .recording
             case .handsFree:
                 state = .recordingHandsFree
             case .command:
                 state = .recordingCommand
+            case .smart:
+                state = .recordingSmart
             }
 
             startRecordingTimer()
             playSubtleSound()
 
-            print("[Dictation] Recording started (mode: \(currentMode))")
+            print("[Dictation] Recording started (mode: \(mode))")
         } catch let error as AudioRecorderService.RecordingError where error == .permissionNotRequested {
-            // First time - need to request permission
+            // First use. Bind the callback to this exact generation so a stale
+            // response can never start a later operation or use mutable mode /
+            // focus state from another shortcut.
+            let request = PendingMicrophoneStart(
+                id: UUID(),
+                mode: mode,
+                pasteTarget: pasteTarget,
+                requiresHeldShortcut: requiresHeldShortcut,
+                shouldStartAfterPermission: true
+            )
+            pendingMicrophoneStart = request
             state = .idle
             recorder.requestPermission { [weak self] granted in
-                guard let self = self else { return }
+                guard let self,
+                      let pendingRequest = self.pendingMicrophoneStart,
+                      pendingRequest.id == request.id else { return }
+                self.pendingMicrophoneStart = nil
+                guard pendingRequest.shouldStartAfterPermission else {
+                    self.activePasteTarget = nil
+                    return
+                }
                 if granted {
-                    self.performStartRecording()
+                    self.currentMode = pendingRequest.mode
+                    self.activePasteTarget = pendingRequest.pasteTarget
+                    self.performStartRecording(
+                        mode: pendingRequest.mode,
+                        pasteTarget: pendingRequest.pasteTarget,
+                        requiresHeldShortcut: pendingRequest.requiresHeldShortcut
+                    )
                 } else {
+                    self.activePasteTarget = nil
                     self.state = .error("Microphone permission denied")
                 }
             }
         } catch {
+            activePasteTarget = nil
             state = .error(error.localizedDescription)
             print("[Dictation] Failed to start: \(error)")
         }
@@ -360,18 +505,12 @@ class DictationService: ObservableObject {
         stopRecordingTimer()
 
         guard let url = recorder.stopRecording() else {
+            activePasteTarget = nil
             state = .error("No recording to process")
             return
         }
 
-        switch currentMode {
-        case .normal:
-            state = .transcribing
-        case .handsFree:
-            state = .transcribingHandsFree
-        case .command:
-            state = .transcribingCommand
-        }
+        state = transcriptionState(for: currentMode)
 
         playStopSound()  // Satisfying "sent" sound
         transcriptionStartTime = Date()
@@ -379,7 +518,11 @@ class DictationService: ObservableObject {
         print("[Dictation] Processing (mode: \(currentMode))...")
 
         let recordedDurationMs = Int(recordingDuration * 1_000)
-        transcribeAudio(url: url, durationMs: recordedDurationMs)
+        transcribeAudio(
+            url: url,
+            durationMs: recordedDurationMs,
+            pasteTarget: activePasteTarget
+        )
     }
 
     private func transcribeAudio(
@@ -387,18 +530,24 @@ class DictationService: ObservableObject {
         durationMs: Int? = nil,
         existingSavedURL: URL? = nil,
         clientID existingClientID: UUID? = nil,
-        pasteTarget existingPasteTarget: UniversalActionTarget? = nil
+        pasteTarget capturedPasteTarget: UniversalActionTarget?
     ) {
         transcriptionTask?.cancel()
         let savedURL = existingSavedURL ?? saveAudioForHistory(tempURL: url)
         let mode = currentMode  // Capture mode before async
 
-        // Get the active dictation mode's transform prompt (if any)
-        let dictationMode = AppSettings.shared.activeDictationMode
-        let transformPrompt = dictationMode.hasCustomPrompt ? dictationMode.systemPrompt : nil
-
         let clientID = existingClientID ?? UUID()
-        let pasteTarget = existingPasteTarget ?? Self.frontmostApplicationTarget()
+        // The argument is deliberately required even though its value may be
+        // nil. A failed start-time capture must remain nil and fail closed; it
+        // must never be confused with "not supplied" and rebound at Send.
+        let pasteTarget = capturedPasteTarget
+        // Normal fn, hands-free, and command-palette dictation remain direct
+        // speech-to-text. Only the explicit Smart shortcut invokes a text model.
+        let transformPrompt = Self.transformPrompt(
+            for: mode,
+            smartPrompt: AppSettings.shared.smartDictationPrompt,
+            targetApplicationName: pasteTarget?.applicationName
+        )
         let transcriptionID = UUID()
         activeTranscriptionID = transcriptionID
         activeTempAudioURL = url
@@ -435,7 +584,12 @@ class DictationService: ObservableObject {
 
                     // Handle based on mode
                     switch mode {
-                    case .normal, .handsFree:
+                    case .normal, .handsFree, .smart:
+                        if case .smart = mode, result.warning != nil {
+                            completionWarning = AppSettings.shared.autoPasteAfterDictation
+                                ? "Smart edit was unavailable. Your raw dictation was pasted."
+                                : "Smart edit was unavailable. Your raw dictation was saved."
+                        }
                         if AppSettings.shared.autoPasteAfterDictation {
                             if let pasteTarget,
                                UniversalActionService.targetMatches(
@@ -513,6 +667,15 @@ class DictationService: ObservableObject {
         }
     }
 
+    private func transcriptionState(for mode: RecordingMode) -> State {
+        switch mode {
+        case .normal: return .transcribing
+        case .handsFree: return .transcribingHandsFree
+        case .command: return .transcribingCommand
+        case .smart: return .transcribingSmart
+        }
+    }
+
     // MARK: - Transcription Timer
 
     private func startTranscriptionTimer() {
@@ -531,13 +694,18 @@ class DictationService: ObservableObject {
         guard let startTime = transcriptionStartTime else { return }
         let elapsed = Date().timeIntervalSince(startTime)
 
-        // Show slow warning
-        if elapsed >= transcriptionTimeout && state == .transcribing {
-            state = .transcribingSlow
+        // Show a slow warning for either the speech or optional Smart step.
+        if elapsed >= transcriptionTimeout {
+            switch state {
+            case .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart:
+                state = .transcribingSlow
+            default:
+                break
+            }
         }
 
         // Hard timeout - give up
-        if elapsed >= transcriptionHardTimeout {
+        if elapsed >= Self.hardTimeout(for: currentMode) {
             failActiveTranscriptionDueToTimeout()
         }
     }
@@ -560,6 +728,7 @@ class DictationService: ObservableObject {
         activeTranscriptionID = nil
         transcriptionTask?.cancel()
         transcriptionTask = nil
+        pendingMicrophoneStart = nil
         clearActiveTranscriptionResources()
         stopTranscriptionTimer()
         recordingDuration = 0
@@ -600,6 +769,7 @@ class DictationService: ObservableObject {
         activeTranscriptionID = nil
         transcriptionTask?.cancel()
         transcriptionTask = nil
+        pendingMicrophoneStart = nil
 
         var uncommittedAudio = Set<URL>()
         [recordingURL, activeTempAudioURL, activeSavedAudioURL,

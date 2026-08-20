@@ -95,7 +95,7 @@ struct ProviderConfigurationSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            Text("Dictation and Cmd + E are configured independently. A key saved for Groq, OpenRouter, or OpenAI can be reused by both features.")
+            Text("Fast dictation has its own provider. Smart Dictation and provider-backed Cmd + E actions share a separate text provider.")
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -146,8 +146,8 @@ struct ProviderConfigurationSettingsView: View {
                 )
             }
 
-            SettingsSection(title: "Cmd + E text actions") {
-                Text("Optional. Copy and Read aloud stay local and work without a text provider. Provider actions show a preview before anything is applied.")
+            SettingsSection(title: "Smart Dictation and text actions") {
+                Text("Optional. Smart Dictation turns spoken instructions into finished text. Provider-backed Cmd + E actions use the same model and show a preview before anything is applied.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

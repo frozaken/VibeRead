@@ -24,9 +24,9 @@ export function ContextAwareContent({ theme = "dark", compact = false }: Context
             compact ? "text-lg" : "text-xl",
             isLight ? "text-slate-600" : "text-[#FFFFEB]/70")}>
           Choose ElevenLabs, Groq, OpenRouter, OpenAI, or a compatible custom
-          endpoint for dictation. Pick the model and language, then configure
-          Cmd + E separately if you want it. ElevenLabs can also power the
-          voice used for read-aloud.
+          endpoint for dictation. Normal Fn dictation only uses that speech
+          provider. Configure a text provider separately for Smart Dictation
+          and provider-backed Cmd + E actions.
         </p>
         <div className={cn("p-4 rounded-2xl border max-w-md mb-8", isLight ? "bg-slate-50 border-slate-200" : "bg-white/5 border-white/10")}>
             <div className="flex items-center gap-3 mb-2">
@@ -69,7 +69,7 @@ export function ContextAwareVisual() {
                     <div className="flex items-center gap-3 rounded-lg border border-white/5 bg-white/5 p-4">
                         <Server className="h-5 w-5 text-[#E0CCFA]" />
                         <div>
-                            <p className="text-sm text-[#FFFFEB]">Dictation and Cmd + E</p>
+                            <p className="text-sm text-[#FFFFEB]">Speech and text providers</p>
                             <p className="text-xs text-[#FFFFEB]/45">Configured separately</p>
                         </div>
                     </div>

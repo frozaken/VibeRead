@@ -24,8 +24,8 @@ import { LogoCloud } from "@/components/landing/LogoCloud";
 import { Navbar } from "@/components/landing/Navbar";
 
 const marqueeItems = [
-  "Dictate in any app",
-  "Read with ElevenLabs or macOS",
+  "Fast or Smart Dictation",
+  "Browse ElevenLabs voices",
   "Make Cmd + E yours",
   "Save pages to a local Library",
 ];
@@ -96,12 +96,11 @@ export default function Home() {
                 One shortcut.<br />Your tools.
               </h2>
               <p className="text-xl text-slate-600">
-                Press{" "}
+                Add, edit, or delete the actions you want. Press{" "}
                 <span className="mx-1 rounded bg-slate-200 px-1.5 py-0.5 font-mono text-base text-slate-900">
                   Cmd + E
                 </span>{" "}
-                anywhere to open your tools. Rebind the shortcut and choose the
-                actions that fit how you work.
+                anywhere to open them, or rebind the shortcut.
               </p>
             </div>
 
@@ -169,7 +168,8 @@ export default function Home() {
                 <p className="mb-10 text-lg leading-relaxed text-[#FFFFEB]/70">
                   Recent dictations stay in local history so you can copy or
                   retry them. Nothing is written to a Vibe Read cloud database.
-                  Your chosen provider still receives content for processing.
+                  Normal dictation sends audio only to your dictation provider.
+                  Smart Dictation also uses your chosen text provider.
                 </p>
 
                 <div className="mt-auto rounded-3xl border border-white/10 bg-[#1A1A1A] p-6">

@@ -369,6 +369,8 @@ struct LocalReadView: View {
 struct LocalActionsView: View {
     @ObservedObject private var store = LocalTextActionStore.shared
     @EnvironmentObject private var settings: AppSettings
+    @State private var editorDraft: LocalActionEditorDraft?
+    @State private var pendingConfirmation: LocalActionsConfirmation?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -379,7 +381,11 @@ struct LocalActionsView: View {
                         .foregroundColor(.secondary)
                 }
                 Spacer()
-                Button("Add Action") { store.add() }
+                Button {
+                    editorDraft = LocalActionEditorDraft()
+                } label: {
+                    Label("Add Action", systemImage: "plus")
+                }
                     .buttonStyle(.borderedProminent)
             }
 
@@ -402,37 +408,291 @@ struct LocalActionsView: View {
             }
             .padding(.vertical, 2)
 
-            List {
-                ForEach($store.actions) { $action in
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField("Action name", text: $action.name)
-                            .font(.headline)
-                        TextEditor(text: $action.prompt)
-                            .frame(minHeight: 58)
-                            .font(.callout)
-                    }
-                    .padding(.vertical, 8)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Custom actions")
+                        .font(.headline)
+                    Text("\(store.actions.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundColor(.secondary)
+                    Spacer()
                 }
-                .onDelete(perform: store.remove)
+                .padding(.bottom, 8)
+
+                if store.actions.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "wand.and.stars")
+                            .font(.system(size: 26, weight: .regular))
+                            .foregroundColor(.secondary)
+                        Text("No custom actions")
+                            .font(.headline)
+                        Text("Add a prompt for rewriting, drafting, translating, or anything else you do often.")
+                            .font(.callout)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 390)
+                        Button("Add Your First Action") {
+                            editorDraft = LocalActionEditorDraft()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.vertical, 28)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(store.actions) { action in
+                                actionRow(action)
+                                Divider()
+                            }
+                        }
+                    }
+                }
             }
-            .listStyle(.inset)
+            .frame(maxHeight: .infinity, alignment: .top)
 
             HStack {
                 Text("Shortcut: \(paletteShortcut)")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
-                Button("Reset Actions") { store.reset() }
+                Button("Restore Defaults") {
+                    pendingConfirmation = .reset
+                }
             }
         }
         .padding(.horizontal, AppTheme.Dimensions.pageInset)
         .padding(.top, AppTheme.Dimensions.pageTopInset)
         .padding(.bottom, AppTheme.Dimensions.pageInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(item: $editorDraft) { draft in
+            LocalActionEditorSheet(store: store, draft: draft)
+        }
+        .alert(confirmationTitle, isPresented: confirmationIsPresented) {
+            Button(confirmationButtonTitle, role: .destructive) {
+                performPendingConfirmation()
+            }
+            Button("Cancel", role: .cancel) {
+                pendingConfirmation = nil
+            }
+        } message: {
+            Text(confirmationMessage)
+        }
     }
 
     private var paletteShortcut: String {
         settings.primaryShortcut(for: .openActionPalette)?.displayString ?? "Not set"
+    }
+
+    private func actionRow(_ action: LocalTextAction) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.secondary)
+                .frame(width: 24, height: 24)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(action.name)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(action.prompt)
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Button {
+                editorDraft = LocalActionEditorDraft(action: action)
+            } label: {
+                Image(systemName: "pencil")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .help("Edit \(action.name)")
+            .accessibilityLabel("Edit \(action.name)")
+
+            Button(role: .destructive) {
+                pendingConfirmation = .delete(action)
+            } label: {
+                Image(systemName: "trash")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .help("Delete \(action.name)")
+            .accessibilityLabel("Delete \(action.name)")
+        }
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+    }
+
+    private var confirmationIsPresented: Binding<Bool> {
+        Binding(
+            get: { pendingConfirmation != nil },
+            set: { isPresented in
+                if !isPresented { pendingConfirmation = nil }
+            }
+        )
+    }
+
+    private var confirmationTitle: String {
+        switch pendingConfirmation {
+        case .delete: return "Delete this action?"
+        case .reset: return "Restore the default actions?"
+        case nil: return "Confirm"
+        }
+    }
+
+    private var confirmationMessage: String {
+        switch pendingConfirmation {
+        case let .delete(action):
+            return "\"\(action.name)\" will be removed from the Cmd+E palette."
+        case .reset:
+            return "Your custom prompts and built-in action choices will be replaced with the defaults."
+        case nil:
+            return ""
+        }
+    }
+
+    private var confirmationButtonTitle: String {
+        switch pendingConfirmation {
+        case .delete: return "Delete"
+        case .reset: return "Restore"
+        case nil: return "Continue"
+        }
+    }
+
+    private func performPendingConfirmation() {
+        switch pendingConfirmation {
+        case let .delete(action): store.remove(id: action.id)
+        case .reset: store.reset()
+        case nil: break
+        }
+        pendingConfirmation = nil
+    }
+}
+
+private enum LocalActionsConfirmation {
+    case delete(LocalTextAction)
+    case reset
+}
+
+private struct LocalActionEditorDraft: Identifiable {
+    let id = UUID()
+    let actionID: UUID?
+    let name: String
+    let prompt: String
+
+    init(action: LocalTextAction? = nil) {
+        actionID = action?.id
+        name = action?.name ?? ""
+        prompt = action?.prompt ?? ""
+    }
+}
+
+private struct LocalActionEditorSheet: View {
+    private enum Field: Hashable {
+        case name
+        case prompt
+    }
+
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: LocalTextActionStore
+    let draft: LocalActionEditorDraft
+
+    @State private var name: String
+    @State private var prompt: String
+    @FocusState private var focusedField: Field?
+
+    init(store: LocalTextActionStore, draft: LocalActionEditorDraft) {
+        self.store = store
+        self.draft = draft
+        _name = State(initialValue: draft.name)
+        _prompt = State(initialValue: draft.prompt)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(draft.actionID == nil ? "New action" : "Edit action")
+                    .font(.title2.bold())
+                Text("This prompt runs on selected text when you choose it from Cmd+E.")
+                    .foregroundColor(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Name")
+                    .font(.headline)
+                TextField("For example, Draft an email", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: .name)
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Instructions")
+                    .font(.headline)
+                TextEditor(text: $prompt)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .padding(10)
+                    .frame(minHeight: 120)
+                    .background(AppTheme.Colors.secondaryContentBackground.opacity(0.55))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(AppTheme.Colors.border, lineWidth: 1)
+                    }
+                    .focused($focusedField, equals: .prompt)
+            }
+
+            HStack(alignment: .center) {
+                if let validationMessage {
+                    Text(validationMessage)
+                        .font(.caption)
+                        .foregroundColor(isDuplicate ? .red : .secondary)
+                } else {
+                    Text("Only the prompt and selected text are sent to your configured provider.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { save() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(validationMessage != nil)
+            }
+        }
+        .padding(24)
+        .frame(width: 520)
+        .frame(minHeight: 390)
+        .onAppear {
+            focusedField = draft.actionID == nil ? .name : .prompt
+        }
+    }
+
+    private var validationMessage: String? {
+        store.validationMessage(
+            name: name,
+            prompt: prompt,
+            excluding: draft.actionID
+        )
+    }
+
+    private var isDuplicate: Bool {
+        validationMessage == "An identical action already exists."
+    }
+
+    private func save() {
+        guard store.save(
+            id: draft.actionID,
+            name: name,
+            prompt: prompt
+        ) else { return }
+        dismiss()
     }
 }
 

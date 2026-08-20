@@ -454,7 +454,8 @@ class KeyboardShortcutService: ObservableObject {
                           let shortcut = findMatchingShortcut(for: [.fn]),
                           shortcut.action != .pushToTalk {
                     // A lone fn is intentionally dispatched on release so the
-                    // user still has time to complete fn+Space or fn+Control.
+                    // user still has time to complete fn+Space, fn+Control,
+                    // or the default fn+Option Smart Dictation shortcut.
                     DispatchQueue.main.async {
                         self.onShortcutTriggered?(shortcut.action)
                     }

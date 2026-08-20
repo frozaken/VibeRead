@@ -2,6 +2,37 @@ import SwiftUI
 import Combine
 import AppKit
 
+enum SmartDictationReadiness {
+    static func isConfigured(
+        model: String,
+        hasCredential: Bool,
+        allowsEmptyCredential: Bool
+    ) -> Bool {
+        !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (hasCredential || allowsEmptyCredential)
+    }
+}
+
+enum DictationShortcutPolicy {
+    /// Provider readiness matters only when the shortcut can begin a new
+    /// recording. A stop/no-op shortcut must never be intercepted by Settings,
+    /// and a repeated shortcut while the microphone sheet is open is ignored.
+    static func requiresStartPreflight(
+        for state: DictationService.State,
+        microphonePermissionRequestInFlight: Bool
+    ) -> Bool {
+        guard !microphonePermissionRequestInFlight else { return false }
+        switch state {
+        case .idle, .done, .error, .cancelled, .cancelledWhileTranscribing:
+            return true
+        case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart,
+             .recordingWarning, .transcribing, .transcribingHandsFree,
+             .transcribingCommand, .transcribingSmart, .transcribingSlow:
+            return false
+        }
+    }
+}
+
 @MainActor
 final class AppState: ObservableObject {
     let settings = AppSettings.shared
@@ -157,7 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         service.onPushToTalkStart = {
             Task { @MainActor in
-                guard Self.ensureDictationIsConfigured() else { return }
+                guard Self.ensureProvidersBeforeStartingIfNeeded() else { return }
                 DictationService.shared.startPushToTalk()
             }
         }
@@ -168,13 +199,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 switch action {
                 case .handsFree:
-                    guard Self.ensureDictationIsConfigured() else { return }
+                    guard Self.ensureProvidersBeforeStartingIfNeeded() else { return }
                     DictationService.shared.toggleHandsFree()
                 case .pushToTalk:
                     break
                 case .commandMode:
-                    guard Self.ensureDictationIsConfigured() else { return }
+                    guard Self.ensureProvidersBeforeStartingIfNeeded() else { return }
                     DictationService.shared.toggleCommandMode()
+                case .smartDictation:
+                    guard Self.ensureProvidersBeforeStartingIfNeeded(
+                        requiresSmartProvider: true
+                    ) else { return }
+                    DictationService.shared.toggleSmartDictation()
                 case .pasteLastTranscript:
                     UniversalActionService.shared.pasteLastDictation()
                 case .openActionPalette:
@@ -206,8 +242,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Stop before recording when a fresh local build has no provider key.
     /// This avoids recording audio only to fail after the user presses Send.
+    private static func ensureProvidersBeforeStartingIfNeeded(
+        requiresSmartProvider: Bool = false
+    ) -> Bool {
+        let dictation = DictationService.shared
+        let requiresPreflight = DictationShortcutPolicy.requiresStartPreflight(
+            for: dictation.state,
+            microphonePermissionRequestInFlight: dictation.isAwaitingMicrophonePermission
+        )
+        guard requiresPreflight else { return true }
+        guard ensureDictationIsConfigured() else { return false }
+        return !requiresSmartProvider || ensureSmartDictationIsConfigured()
+    }
+
     private static func ensureDictationIsConfigured() -> Bool {
         guard AIProviderSettings.shared.needsDictationSetup else { return true }
+        NSApp.activate(ignoringOtherApps: true)
+        NotificationCenter.default.post(name: .showProviderSettings, object: nil)
+        NSSound.beep()
+        return false
+    }
+
+    /// Uses nonsecret provider readiness markers only. Starting Smart
+    /// Dictation should never surprise someone with a keychain prompt after
+    /// they have already recorded a message.
+    private static func ensureSmartDictationIsConfigured() -> Bool {
+        let providers = AIProviderSettings.shared
+        let isReady = SmartDictationReadiness.isConfigured(
+            model: providers.selectedTextActionModel,
+            hasCredential: providers.hasTextAPIKey,
+            allowsEmptyCredential: providers.textProviderAllowsEmptyAPIKey
+        )
+        guard !isReady else { return true }
+
         NSApp.activate(ignoringOtherApps: true)
         NotificationCenter.default.post(name: .showProviderSettings, object: nil)
         NSSound.beep()

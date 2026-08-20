@@ -46,7 +46,7 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://viberead.ai"),
   title: "Vibe Read | Open source voice dictation for Mac",
   description:
-    "A free, open source Mac app for dictation, ElevenLabs or macOS read aloud, a local reading Library, and configurable Cmd + E actions. No Vibe Read account.",
+    "A free, open source Mac app for fast dictation, optional Smart Dictation, ElevenLabs or macOS read aloud, and configurable Cmd + E actions.",
   applicationName: "Vibe Read",
   category: "productivity",
   keywords: [
@@ -65,7 +65,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Vibe Read | Open source voice dictation for Mac",
     description:
-      "Free and open source voice dictation, read aloud, and configurable actions for Mac.",
+      "Free and open source direct or Smart Dictation, read aloud, and configurable actions for Mac.",
     url: "/",
     siteName: "Vibe Read",
     type: "website",
@@ -74,7 +74,7 @@ export const metadata: Metadata = {
     card: "summary",
     title: "Vibe Read | Open source voice dictation for Mac",
     description:
-      "Free and open source voice dictation, read aloud, and configurable actions for Mac.",
+      "Free and open source direct or Smart Dictation, read aloud, and configurable actions for Mac.",
   },
 };
 

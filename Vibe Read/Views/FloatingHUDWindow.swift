@@ -47,10 +47,12 @@ class FloatingHUDController: NSObject, ObservableObject {
         case recording
         case recordingHandsFree  // Hands-free mode recording (green indicator)
         case recordingCommand  // Command mode recording (yellow indicator)
+        case recordingSmart
         case recordingWarning(message: String)  // Time limit warning
         case transcribing
         case transcribingHandsFree  // Hands-free mode transcribing
         case transcribingCommand  // Command mode transcribing
+        case transcribingSmart
         case transcribingSlow  // Taking longer than expected
         case dictationDone
         case cancelled  // With undo option
@@ -81,10 +83,12 @@ class FloatingHUDController: NSObject, ObservableObject {
     // Dictation recording pill size (compact like Wispr Flow)
     // Height includes space above for floating warnings/tooltips
     private let dictationWidth: CGFloat = 140
+    private let smartDictationWidth: CGFloat = 190
     private let dictationPillHeight: CGFloat = 32
     private let dictationWindowHeight: CGFloat = 90  // Extra space for overlays above
     // Processing is normally brief, so keep this as quiet as the original HUD.
     private let transcribingSphereSize: CGFloat = 32
+    private let smartProcessingWidth: CGFloat = 112
     // Cancelled/undo pill (minimal)
     private let cancelledWidth: CGFloat = 220
     private let cancelledHeight: CGFloat = 40
@@ -93,6 +97,7 @@ class FloatingHUDController: NSObject, ObservableObject {
     private let warningHeight: CGFloat = 56
     // Combined TTS + Dictation pill
     private let combinedWidth: CGFloat = 290
+    private let smartCombinedWidth: CGFloat = 340
     private let combinedHeight: CGFloat = 90  // Same height as dictation for overlays
     // TTS player pill (minimal)
     private let ttsPlayerWidth: CGFloat = 140
@@ -122,7 +127,7 @@ class FloatingHUDController: NSObject, ObservableObject {
             // Only handle if dictation is recording or transcribing
             let dictationState = DictationService.shared.state
             switch dictationState {
-            case .recording, .recordingHandsFree, .recordingCommand, .recordingWarning, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSlow:
+            case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow:
                 DictationService.shared.cancel()
             default:
                 break
@@ -135,7 +140,7 @@ class FloatingHUDController: NSObject, ObservableObject {
 
             let dictationState = DictationService.shared.state
             switch dictationState {
-            case .recording, .recordingHandsFree, .recordingCommand, .recordingWarning, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSlow:
+            case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow:
                 DictationService.shared.cancel()
                 return nil  // Consume the event
             default:
@@ -382,7 +387,7 @@ class FloatingHUDController: NSObject, ObservableObject {
             .sink { [weak self] dictationState in
                 // Track if dictation is active (recording or transcribing)
                 switch dictationState {
-                case .recording, .recordingHandsFree, .recordingCommand, .recordingWarning, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSlow:
+                case .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow:
                     self?.isDictationActive = true
                 default:
                     self?.isDictationActive = false
@@ -418,10 +423,12 @@ class FloatingHUDController: NSObject, ObservableObject {
             if case .recording = state { hide() }
             else if case .recordingHandsFree = state { hide() }
             else if case .recordingCommand = state { hide() }
+            else if case .recordingSmart = state { hide() }
             else if case .recordingWarning = state { hide() }
             else if case .transcribing = state { hide() }
             else if case .transcribingHandsFree = state { hide() }
             else if case .transcribingCommand = state { hide() }
+            else if case .transcribingSmart = state { hide() }
             else if case .transcribingSlow = state { hide() }
             else if case .dictationDone = state { hide() }
             else if case .cancelled = state { hide() }
@@ -443,6 +450,11 @@ class FloatingHUDController: NSObject, ObservableObject {
             updateWindowSizeForDictation()
             show()
 
+        case .recordingSmart:
+            state = .recordingSmart
+            updateWindowSizeForSmartDictation()
+            show()
+
         case .recordingWarning(let message):
             warningMessage = message
             state = .recordingWarning(message: message)
@@ -462,6 +474,11 @@ class FloatingHUDController: NSObject, ObservableObject {
         case .transcribingCommand:
             state = .transcribingCommand
             updateWindowSizeForTranscribingSphere()
+            show()
+
+        case .transcribingSmart:
+            state = .transcribingSmart
+            updateWindowSizeForSmartProcessing()
             show()
 
         case .transcribingSlow:
@@ -508,15 +525,33 @@ class FloatingHUDController: NSObject, ObservableObject {
         currentVisualSize = CGSize(width: useWidth, height: dictationWindowHeight)
     }
 
+    private func updateWindowSizeForSmartDictation() {
+        let useWidth = isTTSActive ? smartCombinedWidth : smartDictationWidth
+        currentVisualSize = CGSize(width: useWidth, height: dictationWindowHeight)
+    }
+
     private func updateWindowSizeForTTSPlayer() {
         // If dictation is also active, use combined dimensions
-        let useWidth = isDictationActive ? combinedWidth : ttsPlayerWidth
+        let useWidth: CGFloat
+        if isDictationActive {
+            if case .recordingSmart = state {
+                useWidth = smartCombinedWidth
+            } else {
+                useWidth = combinedWidth
+            }
+        } else {
+            useWidth = ttsPlayerWidth
+        }
         let useHeight = isDictationActive ? combinedHeight : ttsPlayerHeight
         currentVisualSize = CGSize(width: useWidth, height: useHeight)
     }
 
     private func updateWindowSizeForTranscribingSphere() {
         currentVisualSize = CGSize(width: transcribingSphereSize, height: transcribingSphereSize)
+    }
+
+    private func updateWindowSizeForSmartProcessing() {
+        currentVisualSize = CGSize(width: smartProcessingWidth, height: dictationPillHeight)
     }
 
     private func updateWindowSizeForSlowWarning() {
@@ -574,10 +609,10 @@ class FloatingHUDController: NSObject, ObservableObject {
 
         switch state {
         case .generating, .playing,
-             .recording, .recordingHandsFree, .recordingCommand, .recordingWarning,
+             .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning,
              .transcribingSlow, .error, .cancelled, .cancelledWhileTranscribing:
             setInteractive(true)
-        case .hidden, .transcribing, .transcribingHandsFree, .transcribingCommand,
+        case .hidden, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart,
              .dictationDone:
             setInteractive(false)
         }
@@ -729,10 +764,14 @@ struct PillIndicatorView: View {
                     dictationRecordingPill(mode: .handsFree)
                 case .recordingCommand:
                     dictationRecordingPill(mode: .command)
+                case .recordingSmart:
+                    dictationRecordingPill(mode: .smart)
                 case .recordingWarning:
                     dictationWarningPill
                 case .transcribing, .transcribingHandsFree, .transcribingCommand:
                     transcribingSpherePill
+                case .transcribingSmart:
+                    smartTranscribingPill
                 case .transcribingSlow:
                     slowTranscribingPill
                 case .error:
@@ -788,6 +827,7 @@ struct PillIndicatorView: View {
         case normal
         case handsFree
         case command
+        case smart
     }
 
     // MARK: - Combined TTS + Dictation Pill (side by side)
@@ -797,6 +837,7 @@ struct PillIndicatorView: View {
             switch controller.state {
             case .recordingCommand: return .command
             case .recordingHandsFree: return .handsFree
+            case .recordingSmart: return .smart
             default: return .normal
             }
         }()
@@ -925,6 +966,26 @@ struct PillIndicatorView: View {
             )
             .accessibilityLabel("Processing dictation")
             .allowsHitTesting(false)
+    }
+
+    private var smartTranscribingPill: some View {
+        HStack(spacing: 7) {
+            ProgressView()
+                .controlSize(.small)
+
+            Text("Smart edit")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .frame(width: 112, height: 32)
+        .background(
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .shadow(color: .black.opacity(0.12), radius: 5, y: 2)
+        )
+        .accessibilityLabel("Smart dictation is editing")
+        .allowsHitTesting(false)
     }
 
     // MARK: - Recording Warning Pill (time limit approaching)
@@ -1214,7 +1275,7 @@ struct PillIndicatorView: View {
     @ViewBuilder
     private var compactIndicator: some View {
         switch controller.state {
-        case .hidden, .playing, .recording, .recordingHandsFree, .recordingCommand, .recordingWarning, .error, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSlow, .cancelled, .cancelledWhileTranscribing, .generating:
+        case .hidden, .playing, .recording, .recordingHandsFree, .recordingCommand, .recordingSmart, .recordingWarning, .error, .transcribing, .transcribingHandsFree, .transcribingCommand, .transcribingSmart, .transcribingSlow, .cancelled, .cancelledWhileTranscribing, .generating:
             // These have their own expanded pills
             EmptyView()
 
@@ -1404,6 +1465,7 @@ private struct DictationRecordingContentView: View {
     private var completeLabel: String {
         switch mode {
         case .command: return "Send"
+        case .smart: return "Send"
         case .handsFree: return "Done"
         case .normal: return "Done"
         }
@@ -1420,6 +1482,13 @@ private struct DictationRecordingContentView: View {
                 iconSize: 9,
                 isHovered: $cancelHovered
             )
+
+            if case .smart = mode {
+                Label("Smart", systemImage: "wand.and.stars")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
 
             // Audio-reactive waveform
             AudioWaveformView()
@@ -1522,6 +1591,8 @@ private struct CompleteButton: View {
             switch mode {
             case .command:
                 DictationService.shared.toggleCommandMode()
+            case .smart:
+                DictationService.shared.toggleSmartDictation()
             case .handsFree:
                 DictationService.shared.toggleHandsFree()
             case .normal:

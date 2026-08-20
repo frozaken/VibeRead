@@ -318,15 +318,16 @@ final class DictationStore: ObservableObject {
         isLoading = true
         let retryGeneration = UUID()
         retryGenerations[item.id] = retryGeneration
-        let activeMode = AppSettings.shared.activeDictationMode
-        let transformPrompt = activeMode.hasCustomPrompt ? activeMode.systemPrompt : nil
         retryTasks[item.id] = Task { [weak self] in
             guard let self else { return }
             do {
                 let result = try await APIService.shared.transcribeDictation(
                     audioURL: audioURL,
                     vocabulary: AppSettings.shared.customVocabulary,
-                    transformPrompt: transformPrompt
+                    // Legacy history does not record whether a dictation used
+                    // Smart mode. A retry therefore stays direct STT rather
+                    // than unexpectedly sending transcript text elsewhere.
+                    transformPrompt: nil
                 )
                 try Task.checkCancellation()
 

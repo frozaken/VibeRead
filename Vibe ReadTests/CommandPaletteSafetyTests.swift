@@ -3,6 +3,56 @@ import Testing
 @testable import Vibe_Read
 
 struct CommandPaletteSafetyTests {
+    @Test @MainActor func customActionStoreDeduplicatesPersistedActionsWithoutReordering() throws {
+        let suiteName = "VibeReadTests.actions.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let first = LocalTextAction(
+            name: "  Draft email  ",
+            prompt: "  Write a concise reply.  "
+        )
+        let duplicate = LocalTextAction(
+            name: "Draft email",
+            prompt: "Write a concise reply."
+        )
+        let second = LocalTextAction(
+            name: "Turn into bullets",
+            prompt: "Return a short bullet list."
+        )
+        defaults.set(
+            try JSONEncoder().encode([first, duplicate, second]),
+            forKey: "localTextActions.v1"
+        )
+
+        let store = LocalTextActionStore(defaults: defaults)
+
+        #expect(store.actions.map(\.id) == [first.id, second.id])
+        #expect(store.actions.map(\.name) == ["Draft email", "Turn into bullets"])
+
+        let persistedData = try #require(defaults.data(forKey: "localTextActions.v1"))
+        let persisted = try JSONDecoder().decode([LocalTextAction].self, from: persistedData)
+        #expect(persisted == store.actions)
+    }
+
+    @Test @MainActor func customActionEditorRejectsEmptyAndDuplicateActionsAndPreservesOrder() throws {
+        let suiteName = "VibeReadTests.action-editor.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(try JSONEncoder().encode([LocalTextAction]()), forKey: "localTextActions.v1")
+
+        let store = LocalTextActionStore(defaults: defaults)
+        #expect(!store.save(id: nil, name: "", prompt: "Rewrite this"))
+        #expect(!store.save(id: nil, name: "Rewrite", prompt: "   "))
+        #expect(store.save(id: nil, name: " Rewrite ", prompt: " Make it clear. "))
+        #expect(!store.save(id: nil, name: "Rewrite", prompt: "Make it clear."))
+        #expect(store.save(id: nil, name: "Summarize", prompt: "Make it short."))
+
+        let firstID = try #require(store.actions.first?.id)
+        #expect(store.save(id: firstID, name: "Polish", prompt: "Make it clearer."))
+        #expect(store.actions.map(\.name) == ["Polish", "Summarize"])
+    }
+
     @Test func secondFnTransitionFinishesHandsFreeDictation() {
         #expect(
             KeyboardShortcutService.shouldFinishHandsFree(

@@ -19,19 +19,22 @@ The main data directory is:
 
 - `dictations.sqlite3` contains the provider transcript, the final text used by
   Vibe Read, timestamps, duration, and relative references to retained
-  recordings. The two text values are identical unless a custom cleanup prompt
-  changes the transcript.
+  recordings. The two text values are identical for normal dictation. Smart
+  Dictation can produce a different final value.
 - `Dictations/` contains recordings that are still inside the chosen retention
   window.
 - `library.json` contains items saved to the local Library. Delete individual
   items in Library or use **Settings → Local Data → Delete Saved Library**.
-- Preferences such as shortcuts, action definitions, dictation and text
-  provider choices, model identifiers, language, custom provider URLs, and
-  retention settings use the standard macOS preferences system.
+- Preferences such as shortcuts, action definitions, Smart Dictation prompt,
+  dictation and text provider choices, model identifiers, language, custom
+  provider URLs, retention settings, selected read-aloud voice, cached
+  ElevenLabs voice metadata, and the editable voice preview phrase use the
+  standard macOS preferences system.
 - API keys are generic-password items in macOS Keychain. Groq, OpenRouter, and
-  OpenAI each use one provider item that can power both dictation and Cmd + E.
-  ElevenLabs uses one item for dictation and optional read-aloud. Custom dictation and custom text
-  actions use separate items. Keys are not stored in SQLite or preferences.
+  OpenAI each use one provider item that can power dictation, Smart Dictation,
+  and Cmd + E. ElevenLabs uses one item for dictation and optional read-aloud.
+  Custom dictation and custom text actions use separate items. Keys are not
+  stored in SQLite or preferences.
 
 The SQLite database is not application-level encrypted. Use FileVault and a
 locked macOS account if local-at-rest protection matters for your threat model.
@@ -87,6 +90,13 @@ Some older imported formats are not portable between provider APIs. CAF, AIF,
 and AIFF retries are rejected for hosted providers. AAC is rejected for Groq
 and OpenAI, while MP4 is rejected for OpenRouter. Vibe Read reports the format
 before sending a request and leaves the original local file unchanged.
+
+Older builds could append the same placeholder custom action every time Add
+Action was clicked. When the current app loads custom actions, it removes exact
+duplicates with the same trimmed name and prompt. The first copy and the
+remaining action order are preserved. New actions are saved only after the
+in-app editor validates both fields. Actions can be edited or deleted from the
+Actions screen.
 
 Earlier builds could store one generic provider key in Keychain. Vibe Read does
 not automatically discover or read that item. **Use Existing Key** can recover

@@ -53,7 +53,10 @@ struct SettingsView: View {
                 ScrollView {
                     Group {
                         switch tab {
-                        case .general: LocalGeneralSettings()
+                        case .general:
+                            LocalGeneralSettings {
+                                tab = .providers
+                            }
                         case .providers: ProviderConfigurationSettingsView()
                         case .readAloud: LocalReadAloudSettings()
                         case .shortcuts: LocalShortcutSettings()
@@ -77,6 +80,8 @@ struct SettingsView: View {
 private struct LocalGeneralSettings: View {
     @EnvironmentObject private var settings: AppSettings
     @ObservedObject private var accessibility = AccessibilityService.shared
+    @ObservedObject private var providers = AIProviderSettings.shared
+    let onOpenProviders: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -116,6 +121,65 @@ private struct LocalGeneralSettings: View {
                 Toggle("Sound effects", isOn: $settings.dictationSoundEffectsEnabled)
             }
 
+            SettingsSection(title: "Smart Dictation") {
+                Text("Normal Fn dictation stays fast and stops after speech-to-text. Use Smart Dictation when you want spoken instructions turned into finished text.")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack {
+                    Label(
+                        smartDictationIsReady
+                            ? "Ready with \(providers.textActionProvider.displayName)"
+                            : "Text provider not configured",
+                        systemImage: smartDictationIsReady
+                            ? "checkmark.circle.fill"
+                            : "circle.dashed"
+                    )
+                    .foregroundColor(smartDictationIsReady ? .green : .secondary)
+
+                    Spacer()
+
+                    Text(settings.primaryShortcut(for: .smartDictation)?.displayString ?? "Not set")
+                        .font(.system(.body, design: .monospaced))
+                }
+
+                if !smartDictationIsReady {
+                    Button("Set Up Text Provider", action: onOpenProviders)
+                }
+
+                DisclosureGroup("Edit Smart Dictation instructions") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("The raw transcript, these instructions, and the sanitized name of the original app are sent only when you use Smart Dictation.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        TextEditor(text: $settings.smartDictationPrompt)
+                            .font(.body)
+                            .scrollContentBackground(.hidden)
+                            .padding(8)
+                            .frame(minHeight: 132)
+                            .background(Color(nsColor: .textBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .strokeBorder(Color.primary.opacity(0.12))
+                            }
+
+                        HStack {
+                            Spacer()
+                            Button("Restore Default Instructions") {
+                                settings.smartDictationPrompt = AppSettings.defaultSmartDictationPrompt
+                            }
+                            .disabled(
+                                settings.smartDictationPrompt == AppSettings.defaultSmartDictationPrompt
+                            )
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+            }
+
             SettingsSection(title: "Appearance") {
                 Picker("Theme", selection: $settings.themeMode) {
                     Text("System").tag(ThemeMode.system)
@@ -126,12 +190,24 @@ private struct LocalGeneralSettings: View {
             }
         }
     }
+
+    private var smartDictationIsReady: Bool {
+        let hasModel = !providers.selectedTextActionModel
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+        return hasModel
+            && (providers.hasTextAPIKey || providers.textProviderAllowsEmptyAPIKey)
+    }
 }
 
 private struct LocalReadAloudSettings: View {
     @EnvironmentObject private var settings: AppSettings
     @ObservedObject private var tts = InstantTTSService.shared
+    @AppStorage("readAloud.elevenLabs.previewPhrase") private var previewPhrase =
+        "Hello. This is how I sound when reading for you."
+    @State private var voiceSearch = ""
     private let voices = InstantTTSService.availableVoices
+    private let maximumPreviewCharacters = 300
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -149,42 +225,139 @@ private struct LocalReadAloudSettings: View {
                         Text("Flash v2.5 · fastest and lower cost").tag("eleven_flash_v2_5")
                         Text("Eleven v3 · most expressive").tag("eleven_v3")
                     }
-                    Picker("Voice", selection: $settings.elevenLabsVoiceId) {
-                        if !tts.elevenLabsVoices.contains(where: { $0.voiceID == settings.elevenLabsVoiceId }) {
-                            Text(settings.elevenLabsVoiceName).tag(settings.elevenLabsVoiceId)
-                        }
-                        ForEach(tts.elevenLabsVoices) { voice in
-                            Text("\(voice.name) · \(voice.detail)").tag(voice.voiceID)
-                        }
-                    }
-                    .onChange(of: settings.elevenLabsVoiceId) { newID in
-                        if let voice = tts.elevenLabsVoices.first(where: { $0.voiceID == newID }) {
-                            settings.elevenLabsVoiceName = voice.name
-                        }
-                    }
-                    HStack {
+
+                    selectedElevenLabsVoice
+
+                    HStack(spacing: 10) {
                         Button {
                             tts.refreshElevenLabsVoices()
                         } label: {
                             Label(
-                                tts.isLoadingVoices ? "Loading Voices" : "Load My Voices",
-                                systemImage: tts.isLoadingVoices ? "hourglass" : "arrow.clockwise"
+                                tts.elevenLabsVoices.isEmpty ? "Load Voices" : "Reload Voices",
+                                systemImage: "arrow.clockwise"
                             )
                         }
                         .disabled(tts.isLoadingVoices)
-                        Button("Preview") { tts.previewVoice(voiceId: settings.elevenLabsVoiceId) }
-                            .disabled(settings.elevenLabsVoiceId.isEmpty)
+
+                        if tts.isLoadingVoices {
+                            ProgressView().controlSize(.small)
+                            Text("Loading your voices…")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else if !tts.elevenLabsVoices.isEmpty {
+                            Text("\(tts.elevenLabsVoices.count) available")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
                     }
-                    Text("The ElevenLabs key configured under Providers is shared with dictation. It is read only after Load My Voices, Preview, or Read.")
+
+                    if let error = tts.voiceLoadingError {
+                        Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if tts.elevenLabsVoices.isEmpty {
+                        Text("Choose Load Voices to browse the voices available to your ElevenLabs account.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 6)
+                    } else {
+                        voiceBrowser
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Preview phrase").font(.subheadline.weight(.medium))
+                            Spacer()
+                            Text("\(previewPhrase.count)/\(maximumPreviewCharacters)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundColor(.secondary)
+                        }
+                        TextEditor(text: $previewPhrase)
+                            .font(.body)
+                            .scrollContentBackground(.hidden)
+                            .padding(7)
+                            .frame(minHeight: 58, maxHeight: 82)
+                            .background(Color(nsColor: .textBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .strokeBorder(Color.primary.opacity(0.12))
+                            }
+
+                        HStack(spacing: 10) {
+                            if tts.isPreviewLoading || tts.isPreviewPlaying {
+                                Button {
+                                    tts.stopPreview()
+                                } label: {
+                                    Label("Stop Preview", systemImage: "stop.fill")
+                                }
+                            } else {
+                                Button {
+                                    tts.previewVoice(
+                                        voiceId: settings.elevenLabsVoiceId,
+                                        text: previewPhrase
+                                    )
+                                } label: {
+                                    Label("Preview Voice", systemImage: "play.fill")
+                                }
+                                .disabled(
+                                    settings.elevenLabsVoiceId.isEmpty
+                                        || previewPhrase.trimmingCharacters(
+                                            in: .whitespacesAndNewlines
+                                        ).isEmpty
+                                )
+                            }
+
+                            if tts.isPreviewLoading {
+                                ProgressView().controlSize(.small)
+                                Text("Generating preview…")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            } else if tts.isPreviewPlaying {
+                                Image(systemName: "speaker.wave.2.fill")
+                                    .foregroundColor(.secondary)
+                                Text("Playing \(selectedVoiceName)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                        }
+                    }
+
+                    Label(
+                        "Previews generate new audio and use ElevenLabs credits. Vibe Read contacts ElevenLabs only when you choose Load Voices, Preview Voice, or Read.",
+                        systemImage: "creditcard"
+                    )
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let error = tts.error {
+                        Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 } else {
                     Picker("Voice", selection: $settings.preferredVoiceId) {
                         ForEach(voices, id: \.identifier) { voice in
                             Text("\(voice.name) · \(voice.language)").tag(voice.identifier)
                         }
                     }
-                    Button("Preview") { tts.previewVoice(voiceId: settings.preferredVoiceId) }
+                    if tts.isPreviewPlaying {
+                        Button("Stop Preview") { tts.stopPreview() }
+                    } else {
+                        Button("Preview") {
+                            tts.previewVoice(voiceId: settings.preferredVoiceId)
+                        }
+                    }
                     Text("macOS voices run entirely on this Mac.")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -194,8 +367,8 @@ private struct LocalReadAloudSettings: View {
             SettingsSection(title: "Playback") {
                 HStack {
                     Text("Speed")
-                    Slider(value: $settings.voiceSpeed, in: 0.6...1.8, step: 0.05)
-                    Text(String(format: "%.2fx", settings.voiceSpeed)).monospacedDigit()
+                    Slider(value: playbackSpeed, in: playbackSpeedRange, step: 0.05)
+                    Text(String(format: "%.2fx", playbackSpeed.wrappedValue)).monospacedDigit()
                 }
                 if settings.readAloudProvider == .elevenLabs {
                     DisclosureGroup("Voice tuning") {
@@ -208,7 +381,7 @@ private struct LocalReadAloudSettings: View {
                         .padding(.top, 8)
                     }
                 }
-                if let error = tts.error {
+                if settings.readAloudProvider == .macOS, let error = tts.error {
                     Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
                         .foregroundColor(.orange)
@@ -222,6 +395,171 @@ private struct LocalReadAloudSettings: View {
                 language: Locale.current.language.languageCode?.identifier ?? "en"
                ) ?? voices.first {
                 settings.preferredVoiceId = defaultVoice.identifier
+            }
+        }
+        .onChange(of: previewPhrase) { value in
+            if value.count > maximumPreviewCharacters {
+                previewPhrase = String(value.prefix(maximumPreviewCharacters))
+            }
+        }
+        .onChange(of: settings.readAloudProvider) { _ in
+            tts.stopPreview()
+        }
+        .onDisappear {
+            tts.stopPreview()
+        }
+    }
+
+    private var filteredElevenLabsVoices: [ElevenLabsVoice] {
+        tts.elevenLabsVoices.filter { $0.matches(searchTerm: voiceSearch) }
+    }
+
+    private var selectedVoice: ElevenLabsVoice? {
+        tts.elevenLabsVoices.first { $0.voiceID == settings.elevenLabsVoiceId }
+    }
+
+    private var selectedVoiceName: String {
+        let savedName = settings.elevenLabsVoiceName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return selectedVoice?.name
+            ?? (savedName.isEmpty ? "No voice selected" : savedName)
+    }
+
+    private var playbackSpeedRange: ClosedRange<Double> {
+        settings.readAloudProvider == .elevenLabs ? 0.7...1.2 : 0.6...1.8
+    }
+
+    private var playbackSpeed: Binding<Double> {
+        Binding(
+            get: {
+                if settings.readAloudProvider == .elevenLabs {
+                    return min(1.2, max(0.7, settings.voiceSpeed))
+                }
+                return settings.voiceSpeed
+            },
+            set: { settings.voiceSpeed = $0 }
+        )
+    }
+
+    private var selectedElevenLabsVoice: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "waveform")
+                .font(.title3)
+                .frame(width: 28, height: 28)
+                .background(Color.primary.opacity(0.06))
+                .clipShape(Circle())
+            VStack(alignment: .leading, spacing: 3) {
+                Text(selectedVoiceName).font(.headline)
+                Text(
+                    selectedVoice?.detail
+                        ?? (settings.elevenLabsVoiceId.isEmpty
+                            ? "Load voices to choose one"
+                            : "Saved ElevenLabs voice")
+                )
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer()
+            Text("Selected")
+                .font(.caption.weight(.medium))
+                .foregroundColor(.secondary)
+        }
+        .padding(12)
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9)
+                .strokeBorder(Color.primary.opacity(0.1))
+        }
+    }
+
+    private var voiceBrowser: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+                TextField("Search by name, accent, or use", text: $voiceSearch)
+                    .textFieldStyle(.plain)
+                if !voiceSearch.isEmpty {
+                    Button {
+                        voiceSearch = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear search")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.primary.opacity(0.12))
+            }
+
+            if filteredElevenLabsVoices.isEmpty {
+                Text("No voices match \"\(voiceSearch)\".")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 18)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(filteredElevenLabsVoices) { voice in
+                            Button {
+                                if tts.previewingVoiceId != nil {
+                                    tts.stopPreview()
+                                }
+                                settings.elevenLabsVoiceId = voice.voiceID
+                                settings.elevenLabsVoiceName = voice.name
+                            } label: {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(
+                                        systemName: voice.voiceID == settings.elevenLabsVoiceId
+                                            ? "checkmark.circle.fill"
+                                            : "circle"
+                                    )
+                                    .foregroundColor(
+                                        voice.voiceID == settings.elevenLabsVoiceId
+                                            ? .primary
+                                            : .secondary
+                                    )
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(voice.name)
+                                            .font(.body.weight(.medium))
+                                            .foregroundColor(.primary)
+                                        Text(voice.detail)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(2)
+                                    }
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 9)
+                                .background(
+                                    voice.voiceID == settings.elevenLabsVoiceId
+                                        ? Color.primary.opacity(0.055)
+                                        : Color.clear
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            Divider().padding(.leading, 42)
+                        }
+                    }
+                }
+                .frame(height: min(238, CGFloat(max(1, filteredElevenLabsVoices.count)) * 57))
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.primary.opacity(0.1))
+                }
             }
         }
     }

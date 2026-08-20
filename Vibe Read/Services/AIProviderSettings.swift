@@ -260,14 +260,14 @@ enum AIProviderCatalog {
 
     static let groqTextModels: [ProviderModelOption] = [
         .init(
-            modelID: "openai/gpt-oss-120b",
-            displayName: "GPT OSS 120B",
-            detail: "Larger Groq-hosted model"
-        ),
-        .init(
             modelID: "openai/gpt-oss-20b",
             displayName: "GPT OSS 20B",
-            detail: "Smaller Groq-hosted model"
+            detail: "Fast option for Smart Dictation and actions"
+        ),
+        .init(
+            modelID: "openai/gpt-oss-120b",
+            displayName: "GPT OSS 120B",
+            detail: "Larger model for more involved actions"
         )
     ]
 
@@ -275,7 +275,7 @@ enum AIProviderCatalog {
         .init(
             modelID: "openai/gpt-5.6-luna",
             displayName: "GPT-5.6 Luna",
-            detail: "Text cleanup and commands"
+            detail: "Fast option for Smart Dictation and actions"
         ),
         .init(
             modelID: "openai/gpt-oss-20b",
@@ -288,7 +288,7 @@ enum AIProviderCatalog {
         .init(
             modelID: "gpt-5.6-luna",
             displayName: "GPT-5.6 Luna",
-            detail: "Text cleanup and commands"
+            detail: "Fast option for Smart Dictation and actions"
         )
     ]
 }
@@ -947,7 +947,8 @@ final class AIProviderSettings: ObservableObject {
         set { selectedTextActionModel = newValue }
     }
     var textProviderAllowsEmptyAPIKey: Bool {
-        Self.validatedProviderURL(customTextBaseURL)?.isLoopbackProvider == true
+        textActionProvider == .customOpenAICompatible
+            && Self.validatedProviderURL(customTextBaseURL)?.isLoopbackProvider == true
     }
 
     func saveElevenLabsAPIKey(_ value: String) throws { try saveAPIKey(value, for: .elevenLabs) }

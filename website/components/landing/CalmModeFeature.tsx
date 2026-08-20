@@ -23,9 +23,9 @@ export function CalmModeContent({ theme = "dark", compact = false }: CalmModeFea
         <p className={cn("leading-relaxed mb-10 max-w-lg",
             compact ? "text-lg" : "text-xl",
             isLight ? "text-slate-600" : "text-[#FFFFEB]/70")}>
-          Choose which actions appear, change their prompts, or rebind the
-          shortcut. Provider-backed results stay in the menu for review before
-          you apply them.
+          Add, edit, or delete custom actions in the app, choose the built-in
+          tools you want, and rebind the shortcut. Provider-backed results stay
+          in the menu for review before you apply them.
         </p>
         <div className="flex flex-col sm:flex-row gap-6 items-start sm:items-center">
             <div className="flex gap-4">

@@ -24,9 +24,9 @@ export function InstantReadContent({ theme = "dark", compact = false }: InstantR
         <p className={cn("leading-relaxed mb-10 max-w-lg",
             compact ? "text-lg" : "text-xl",
             isLight ? "text-slate-600" : "text-[#FFFFEB]/70")}>
-          Select text, open a saved page, or paste a note. Use an ElevenLabs
-          voice when you want it, or keep everything offline with the voices
-          already on your Mac.
+          Select text, open a saved page, or paste a note. Search your
+          ElevenLabs voice list and preview a phrase before choosing, or keep
+          everything offline with a voice already on your Mac.
         </p>
         <div className="flex flex-col sm:flex-row gap-6 items-start sm:items-center">
             <div className="flex gap-4">

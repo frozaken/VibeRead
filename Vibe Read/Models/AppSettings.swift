@@ -61,15 +61,8 @@ final class AppSettings: ObservableObject {
     @Published var selectedMicrophoneId: String {
         didSet { defaults.set(selectedMicrophoneId, forKey: "selectedMicrophoneId") }
     }
-    @Published var dictationModes: [DictationMode] {
-        didSet {
-            if let data = try? JSONEncoder().encode(dictationModes) {
-                defaults.set(data, forKey: "dictationModes")
-            }
-        }
-    }
-    @Published var activeDictationModeId: String {
-        didSet { defaults.set(activeDictationModeId, forKey: "activeDictationModeId") }
+    @Published var smartDictationPrompt: String {
+        didSet { defaults.set(smartDictationPrompt, forKey: "smartDictationPrompt") }
     }
     @Published var shortcuts: [CustomKeyboardShortcut] {
         didSet {
@@ -78,10 +71,6 @@ final class AppSettings: ObservableObject {
             }
             NotificationCenter.default.post(name: .shortcutsDidChange, object: nil)
         }
-    }
-
-    var activeDictationMode: DictationMode {
-        dictationModes.first(where: { $0.id == activeDictationModeId }) ?? .plain
     }
 
     private init() {
@@ -120,14 +109,8 @@ final class AppSettings: ObservableObject {
             customVocabulary = []
         }
 
-        if let data = defaults.data(forKey: "dictationModes"),
-           let decoded = try? JSONDecoder().decode([DictationMode].self, from: data),
-           !decoded.isEmpty {
-            dictationModes = decoded
-        } else {
-            dictationModes = DictationMode.defaultModes
-        }
-        activeDictationModeId = defaults.string(forKey: "activeDictationModeId") ?? DictationMode.plain.id
+        smartDictationPrompt = defaults.string(forKey: "smartDictationPrompt")
+            ?? Self.defaultSmartDictationPrompt
 
         var loaded: [CustomKeyboardShortcut]
         if let data = defaults.data(forKey: "keyboardShortcuts"),
@@ -138,7 +121,12 @@ final class AppSettings: ObservableObject {
         }
         // Preserve user customizations while adding newly introduced actions.
         for fallback in Self.defaultShortcuts where !loaded.contains(where: { $0.action == fallback.action }) {
-            loaded.append(fallback)
+            // Do not create two actions for the same chord when upgrading an
+            // existing customized install. The new action remains visible as
+            // "Not set" in Settings and can be rebound explicitly.
+            if !loaded.contains(where: { Set($0.keys) == Set(fallback.keys) }) {
+                loaded.append(fallback)
+            }
         }
         shortcuts = loaded
     }
@@ -179,12 +167,24 @@ final class AppSettings: ObservableObject {
             .init(keys: [.fn], action: .handsFree),
             .init(keys: [.fn, .space], action: .pushToTalk),
             .init(keys: [.fn, .control], action: .commandMode),
+            .init(keys: [.fn, .option], action: .smartDictation),
             .init(keys: [.control, .command, .v], action: .pasteLastTranscript),
             .init(keys: [.command, .e], action: .openActionPalette),
             .init(keys: [.command, .shift, .e], action: .readSelection),
             .init(keys: [.command, .shift, .space], action: .toggleReadAloud)
         ]
     }
+
+    static let defaultSmartDictationPrompt = """
+    You are Vibe Read's smart dictation editor. Turn the transcript into the finished text the speaker intends to paste.
+
+    Follow these rules:
+    - Follow explicit spoken instructions about the document type, recipient, tone, structure, and formatting.
+    - When the speaker asks you to write, draft, reply, rewrite, format, or list something, produce that finished text. Do not repeat or explain the request.
+    - Otherwise, lightly remove filler words, false starts, and accidental repetition while preserving the speaker's meaning and voice.
+    - Never invent names, facts, promises, dates, links, or details the speaker did not provide.
+    - Return only the finished text, using plain text unless the speaker requests a specific format.
+    """
 }
 
 enum ReadAloudProvider: String, CaseIterable, Codable, Identifiable {
@@ -209,6 +209,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Identifiable {
     case pushToTalk = "push_to_talk"
     case handsFree = "hands_free"
     case commandMode = "command_mode"
+    case smartDictation = "smart_dictation"
     case pasteLastTranscript = "paste_transcript"
     case openActionPalette = "open_action_palette"
     case readSelection = "read_selection"
@@ -221,6 +222,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Identifiable {
         case .pushToTalk: return "Push to talk"
         case .handsFree: return "Hands-free dictation"
         case .commandMode: return "Voice action palette"
+        case .smartDictation: return "Smart dictation"
         case .pasteLastTranscript: return "Paste last dictation"
         case .openActionPalette: return "Open action palette"
         case .readSelection: return "Read selected text"
@@ -233,10 +235,11 @@ enum ShortcutAction: String, CaseIterable, Codable, Identifiable {
         case .pushToTalk: return "Hold to record, release to transcribe"
         case .handsFree: return "Press once to start and once to finish"
         case .commandMode: return "Dictate text, then choose a local action"
+        case .smartDictation: return "Dictate instructions, then paste the finished text"
         case .pasteLastTranscript: return "Paste the last saved dictation"
         case .openActionPalette: return "Show editable actions for selected text"
-        case .readSelection: return "Read selected text with a macOS voice"
-        case .toggleReadAloud: return "Pause or resume local read-aloud"
+        case .readSelection: return "Read selected text with your chosen voice"
+        case .toggleReadAloud: return "Pause or resume read-aloud"
         }
     }
 }
@@ -318,17 +321,6 @@ enum ShortcutError: LocalizedError {
         case .alreadyInUse(let action): return "That shortcut is already used by \(action.displayName)"
         }
     }
-}
-
-struct DictationMode: Identifiable, Codable, Equatable, Hashable {
-    let id: String
-    var name: String
-    var systemPrompt: String
-    var isBuiltIn: Bool
-
-    var hasCustomPrompt: Bool { !systemPrompt.isEmpty }
-    static let plain = DictationMode(id: "default", name: "Default", systemPrompt: "", isBuiltIn: true)
-    static let defaultModes = [plain]
 }
 
 extension Result {

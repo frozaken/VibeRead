@@ -20,7 +20,9 @@ export function Hero() {
         </h1>
 
         <p className="text-base md:text-xl text-slate-600 max-w-2xl mb-12 leading-relaxed font-light px-4">
-          A small open source Mac app for dictation, read-aloud, and configurable Cmd + E actions. History stays on your Mac. Audio goes to the dictation provider you choose.
+          A small open source Mac app for fast dictation, optional Smart
+          Dictation, read-aloud, and configurable Cmd + E actions. History
+          stays on your Mac.
         </p>
 
         <div className="flex flex-col sm:flex-row gap-4 items-center mb-2">

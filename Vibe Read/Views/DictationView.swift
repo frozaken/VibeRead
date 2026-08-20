@@ -18,17 +18,7 @@ struct DictationView: View {
             DictationStatsHeader(items: store.items)
                 .padding(.horizontal, 28)
                 .padding(.vertical, 22)
-                .background {
-                    LinearGradient(
-                        colors: [
-                            AppTheme.Colors.creamSurface.opacity(0.72),
-                            AppTheme.Colors.creamSurface.opacity(0.24),
-                            Color.clear
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                }
+                .background(AppTheme.Colors.contentBackground)
                 .overlay(
                     Rectangle()
                         .frame(height: 1)
@@ -48,6 +38,7 @@ struct DictationView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .tint(Color.gray)
                 .frame(width: 280)
 
                 Spacer()
@@ -88,9 +79,9 @@ struct DictationStatsHeader: View {
 
     var body: some View {
         HStack(spacing: 44) {
-            StatItem(value: "\(wpm)", label: "WPM", icon: "speedometer", color: AppTheme.Colors.brandAccent)
-            StatItem(value: "\(totalWords)", label: "Words", icon: "text.alignleft", color: AppTheme.Colors.brandAccent)
-            StatItem(value: formatDuration(totalDurationSeconds), label: "Time", icon: "clock", color: AppTheme.Colors.brandAccent)
+            StatItem(value: "\(wpm)", label: "WPM", icon: "speedometer")
+            StatItem(value: "\(totalWords)", label: "Words", icon: "text.alignleft")
+            StatItem(value: formatDuration(totalDurationSeconds), label: "Time", icon: "clock")
             Spacer()
         }
     }
@@ -115,15 +106,13 @@ struct StatItem: View {
     let value: String
     let label: String
     let icon: String
-    let color: Color
-
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.title2)
-                .foregroundColor(color)
+                .foregroundColor(.secondary)
                 .frame(width: 30, height: 30)
-                .background(color.opacity(0.13))
+                .background(Color.primary.opacity(0.07))
                 .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 2) {

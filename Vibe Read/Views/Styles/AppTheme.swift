@@ -11,8 +11,7 @@ struct AppTheme {
                     // Slightly warmer dark grey (hint of brown/creme)
                     return NSColor(calibratedRed: 0.13, green: 0.125, blue: 0.12, alpha: 1.0)
                 } else {
-                    // Slightly warmer light grey (creme tint)
-                    return NSColor(calibratedRed: 0.96, green: 0.96, blue: 0.95, alpha: 1.0)
+                    return NSColor(calibratedRed: 0.98, green: 0.97, blue: 0.93, alpha: 1.0)
                 }
             }))
         }
@@ -40,9 +39,9 @@ struct AppTheme {
         static var brandAccent: Color {
             Color(nsColor: NSColor(name: "VibeReadAccent", dynamicProvider: { appearance in
                 if appearance.name == .darkAqua {
-                    return NSColor(calibratedRed: 0.94, green: 0.91, blue: 0.83, alpha: 1)
+                    return NSColor(calibratedWhite: 0.72, alpha: 1)
                 }
-                return NSColor(calibratedRed: 0.16, green: 0.15, blue: 0.14, alpha: 1)
+                return NSColor(calibratedWhite: 0.42, alpha: 1)
             }))
         }
 

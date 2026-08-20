@@ -45,6 +45,24 @@ struct AppTheme {
                 return NSColor(calibratedRed: 0.43, green: 0.31, blue: 0.70, alpha: 1)
             }))
         }
+
+        static var brandGreen: Color {
+            Color(nsColor: NSColor(name: "VibeReadGreen", dynamicProvider: { appearance in
+                if appearance.name == .darkAqua {
+                    return NSColor(calibratedRed: 0.30, green: 0.72, blue: 0.61, alpha: 1)
+                }
+                return NSColor(calibratedRed: 0.00, green: 0.36, blue: 0.30, alpha: 1)
+            }))
+        }
+
+        static var brandWarm: Color {
+            Color(nsColor: NSColor(name: "VibeReadWarm", dynamicProvider: { appearance in
+                if appearance.name == .darkAqua {
+                    return NSColor(calibratedRed: 0.96, green: 0.65, blue: 0.38, alpha: 1)
+                }
+                return NSColor(calibratedRed: 0.78, green: 0.38, blue: 0.12, alpha: 1)
+            }))
+        }
     }
 
     struct Dimensions {

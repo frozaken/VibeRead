@@ -16,8 +16,19 @@ struct DictationView: View {
         VStack(spacing: 0) {
             // Stats Header
             DictationStatsHeader(items: store.items)
-                .padding()
-                .background(AppTheme.Colors.contentBackground)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 22)
+                .background {
+                    LinearGradient(
+                        colors: [
+                            AppTheme.Colors.brandAccent.opacity(0.11),
+                            AppTheme.Colors.brandGreen.opacity(0.045),
+                            Color.clear
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                }
                 .overlay(
                     Rectangle()
                         .frame(height: 1)
@@ -37,7 +48,7 @@ struct DictationView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 300)
+                .frame(width: 280)
 
                 Spacer()
             }
@@ -76,10 +87,10 @@ struct DictationStatsHeader: View {
     }
 
     var body: some View {
-        HStack(spacing: 40) {
-            StatItem(value: "\(wpm)", label: "WPM", icon: "speedometer")
-            StatItem(value: "\(totalWords)", label: "Words", icon: "text.alignleft")
-            StatItem(value: formatDuration(totalDurationSeconds), label: "Time", icon: "clock")
+        HStack(spacing: 44) {
+            StatItem(value: "\(wpm)", label: "WPM", icon: "speedometer", color: AppTheme.Colors.brandAccent)
+            StatItem(value: "\(totalWords)", label: "Words", icon: "text.alignleft", color: AppTheme.Colors.brandGreen)
+            StatItem(value: formatDuration(totalDurationSeconds), label: "Time", icon: "clock", color: AppTheme.Colors.brandWarm)
             Spacer()
         }
     }
@@ -104,14 +115,15 @@ struct StatItem: View {
     let value: String
     let label: String
     let icon: String
+    let color: Color
 
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.title2)
-                .foregroundColor(.accentColor)
+                .foregroundColor(color)
                 .frame(width: 30, height: 30)
-                .background(Color.accentColor.opacity(0.1))
+                .background(color.opacity(0.13))
                 .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 2) {
@@ -167,11 +179,11 @@ struct DictationHistoryView: View {
                             }
                         }
                     }
-                    .background(Color.primary.opacity(0.02))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .background(AppTheme.Colors.secondaryContentBackground.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(AppTheme.Colors.border, lineWidth: 1)
                     )
                     .padding(.horizontal, 24)
                 }

@@ -27,6 +27,7 @@ struct VibeReadApp: App {
                 .frame(minWidth: 840, minHeight: 580)
         }
         .defaultSize(width: 1100, height: 760)
+        .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .pasteboard) {

@@ -48,7 +48,14 @@ struct MainView: View {
                             cornerRadius: AppTheme.Dimensions.contentCornerRadius,
                             style: .continuous
                         ))
-                        .shadow(color: .black.opacity(0.08), radius: 3, y: 1)
+                        .overlay {
+                            RoundedRectangle(
+                                cornerRadius: AppTheme.Dimensions.contentCornerRadius,
+                                style: .continuous
+                            )
+                            .stroke(AppTheme.Colors.border, lineWidth: 1)
+                        }
+                        .shadow(color: .black.opacity(0.1), radius: 8, y: 3)
 
                     contentViews
                         .clipShape(RoundedRectangle(
@@ -72,32 +79,6 @@ struct MainView: View {
         .background(AppTheme.Colors.sidebarBackground)
         .toolbarBackground(AppTheme.Colors.sidebarBackground, for: .windowToolbar)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSidebarCollapsed)
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        isSidebarCollapsed.toggle()
-                    }
-                } label: {
-                    Image(systemName: "sidebar.left")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help(isSidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar")
-                .accessibilityLabel(isSidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar")
-            }
-
-            ToolbarItem(placement: .automatic) {
-                Button(action: openSettings) {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Settings")
-            }
-        }
         .sheet(isPresented: $showingSettings) {
             SettingsView(startsOnProvider: settingsStartsOnProvider)
                 .dismissableSheet()
@@ -154,19 +135,20 @@ private struct LocalSidebarView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var logoPressed = false
+    @State private var collapseHovered = false
 
     var body: some View {
         VStack(spacing: 0) {
-            Button(action: celebrate) {
-                HStack(spacing: 10) {
-                    Image(nsImage: NSImage(named: "AppIcon") ?? NSImage())
-                        .resizable()
-                        .interpolation(.high)
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 24, height: 24)
-                        .scaleEffect(logoPressed ? 0.9 : 1)
+            Group {
+                if isCollapsed {
+                    VStack(spacing: 10) {
+                        logoButton
+                        collapseButton
+                    }
+                } else {
+                    HStack(spacing: 10) {
+                        logoButton
 
-                    if !isCollapsed {
                         Text("Vibe Read")
                             .font(.system(size: 16, weight: .semibold, design: .rounded))
                             .foregroundStyle(.primary)
@@ -174,18 +156,15 @@ private struct LocalSidebarView: View {
                             .transition(.opacity.combined(with: .move(edge: .leading)))
 
                         Spacer(minLength: 0)
+
+                        collapseButton
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .padding(.horizontal, isCollapsed ? 0 : 20)
+            .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
+            .padding(.horizontal, isCollapsed ? 0 : 16)
             .padding(.top, 8)
-            .padding(.bottom, 16)
-            .help("Celebrate")
-            .accessibilityLabel("Vibe Read logo")
-            .accessibilityHint("Celebrate with confetti")
+            .padding(.bottom, 18)
 
             VStack(spacing: 4) {
                 ForEach(LocalAppTab.allCases) { tab in
@@ -215,6 +194,42 @@ private struct LocalSidebarView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppTheme.Colors.sidebarBackground)
+    }
+
+    private var logoButton: some View {
+        Button(action: celebrate) {
+            Image(nsImage: NSImage(named: "AppIcon") ?? NSImage())
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 26, height: 26)
+                .scaleEffect(logoPressed ? 0.9 : 1)
+        }
+        .buttonStyle(.plain)
+        .help("Celebrate")
+        .accessibilityLabel("Vibe Read logo")
+        .accessibilityHint("Celebrate with confetti")
+    }
+
+    private var collapseButton: some View {
+        Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                isCollapsed.toggle()
+            }
+        } label: {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(collapseHovered ? Color.primary : Color.secondary)
+                .frame(width: 28, height: 28)
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(collapseHovered ? Color.primary.opacity(0.07) : Color.clear)
+                }
+        }
+        .buttonStyle(.plain)
+        .onHover { collapseHovered = $0 }
+        .help(isCollapsed ? "Expand Sidebar" : "Collapse Sidebar")
+        .accessibilityLabel(isCollapsed ? "Expand Sidebar" : "Collapse Sidebar")
     }
 
     private func celebrate() {
@@ -283,7 +298,7 @@ private struct LocalSidebarButton: View {
     }
 
     private var buttonBackground: Color {
-        if isSelected { return AppTheme.Colors.contentBackground }
+        if isSelected { return AppTheme.Colors.brandAccent.opacity(0.16) }
         if isHovered { return Color.primary.opacity(0.055) }
         return .clear
     }
@@ -301,13 +316,20 @@ struct LocalReadView: View {
                 Text(readAloudDescription)
                     .foregroundColor(.secondary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(22)
+            .background(AppTheme.Colors.brandAccent.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             TextEditor(text: $text)
                 .font(.body)
-                .padding(10)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
+                .padding(14)
+                .background(AppTheme.Colors.secondaryContentBackground.opacity(0.65))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(AppTheme.Colors.border, lineWidth: 1)
+                }
 
             HStack {
                 Button("Paste from Clipboard") {
@@ -359,6 +381,9 @@ struct LocalActionsView: View {
                 Button("Add Action") { store.add() }
                     .buttonStyle(.borderedProminent)
             }
+            .padding(22)
+            .background(AppTheme.Colors.brandGreen.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             VStack(alignment: .leading, spacing: 10) {
                 Text("Built-in actions").font(.headline)
@@ -378,8 +403,8 @@ struct LocalActionsView: View {
                 }
             }
             .padding(14)
-            .background(.thinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .background(AppTheme.Colors.brandAccent.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
             List {
                 ForEach($store.actions) { $action in

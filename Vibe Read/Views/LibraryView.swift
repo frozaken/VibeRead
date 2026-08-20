@@ -41,9 +41,12 @@ struct LocalLibraryView: View {
                 }
                 .buttonStyle(.borderedProminent)
             }
-            .padding(28)
+            .padding(22)
+            .background(AppTheme.Colors.brandWarm.opacity(0.09))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding(24)
 
-            Divider()
+            Divider().padding(.horizontal, 24)
 
             if store.items.isEmpty {
                 VStack(spacing: 14) {

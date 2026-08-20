@@ -288,15 +288,28 @@ class AccessibilityService: ObservableObject {
         return outcome
     }
 
-    /// Backward-compatible convenience for callers that need only to know
-    /// whether Cmd+V was posted. The output is retained on the clipboard for
-    /// both successful and failed paste attempts.
+    /// Paste text for an explicit action such as Cmd+E Apply. Unlike completed
+    /// dictation delivery, this keeps the user's existing clipboard intact.
     @discardableResult
     func pasteText(
         _ text: String,
         expectedTarget: UniversalActionTarget? = nil
     ) -> Bool {
-        pasteTextWithOutcome(text, expectedTarget: expectedTarget).didPaste
+        Self.deliverTextTemporarily(
+            text,
+            expectedTarget: expectedTarget,
+            pasteboard: .general,
+            hasAccessibilityPermission: checkPermission(),
+            currentTarget: Self.frontmostApplicationTarget,
+            postPasteShortcut: { [weak self] in
+                self?.simulateKeyPress(keyCode: 9, modifiers: .maskCommand) ?? false
+            },
+            scheduleRestore: { restore in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    restore()
+                }
+            }
+        )
     }
 
     /// Deterministic core used by unit tests and the live Accessibility path.
@@ -330,6 +343,57 @@ class AccessibilityService: ObservableObject {
         return .pasted
     }
 
+    /// Deterministic core for explicit actions whose output should not replace
+    /// the user's clipboard after Cmd+V has been posted.
+    static func deliverTextTemporarily(
+        _ text: String,
+        expectedTarget: UniversalActionTarget?,
+        pasteboard: NSPasteboard,
+        hasAccessibilityPermission: Bool,
+        currentTarget: () -> UniversalActionTarget?,
+        postPasteShortcut: () -> Bool,
+        scheduleRestore: (@escaping () -> Void) -> Void
+    ) -> Bool {
+        guard hasAccessibilityPermission else { return false }
+        if let expectedTarget,
+           !targetMatches(expectedTarget, currentTarget()) {
+            return false
+        }
+
+        let previousItems = (pasteboard.pasteboardItems ?? []).map {
+            PasteboardItemSnapshot(item: $0)
+        }
+        pasteboard.clearContents()
+        guard pasteboard.setString(text, forType: .string) else {
+            restore(previousItems, to: pasteboard)
+            return false
+        }
+        let temporaryChangeCount = pasteboard.changeCount
+
+        // Snapshotting a lazy pasteboard can take time, so validate again at
+        // the actual event-posting boundary.
+        if let expectedTarget,
+           !targetMatches(expectedTarget, currentTarget()) {
+            if pasteboard.changeCount == temporaryChangeCount {
+                restore(previousItems, to: pasteboard)
+            }
+            return false
+        }
+
+        guard postPasteShortcut() else {
+            if pasteboard.changeCount == temporaryChangeCount {
+                restore(previousItems, to: pasteboard)
+            }
+            return false
+        }
+
+        scheduleRestore {
+            guard pasteboard.changeCount == temporaryChangeCount else { return }
+            restore(previousItems, to: pasteboard)
+        }
+        return true
+    }
+
     private static func targetMatches(
         _ expected: UniversalActionTarget,
         _ current: UniversalActionTarget?
@@ -338,6 +402,28 @@ class AccessibilityService: ObservableObject {
         return expected.processIdentifier == current.processIdentifier
             && (expected.bundleIdentifier.isEmpty
                 || expected.bundleIdentifier == current.bundleIdentifier)
+    }
+
+    private static func frontmostApplicationTarget() -> UniversalActionTarget? {
+        guard let application = NSWorkspace.shared.frontmostApplication else {
+            return nil
+        }
+        return UniversalActionTarget(
+            bundleIdentifier: application.bundleIdentifier ?? "",
+            processIdentifier: application.processIdentifier,
+            applicationName: application.localizedName ?? "the original app"
+        )
+    }
+
+    private static func restore(
+        _ snapshots: [PasteboardItemSnapshot],
+        to pasteboard: NSPasteboard
+    ) {
+        pasteboard.clearContents()
+        let items = snapshots.map(\.pasteboardItem)
+        if !items.isEmpty {
+            pasteboard.writeObjects(items)
+        }
     }
 
     // MARK: - Get Frontmost App Info
@@ -351,6 +437,24 @@ class AccessibilityService: ObservableObject {
             name: frontApp.localizedName ?? "Unknown",
             bundleId: frontApp.bundleIdentifier ?? "Unknown"
         )
+    }
+}
+
+private struct PasteboardItemSnapshot {
+    let values: [(type: NSPasteboard.PasteboardType, data: Data)]
+
+    init(item: NSPasteboardItem) {
+        values = item.types.compactMap { type in
+            item.data(forType: type).map { (type, $0) }
+        }
+    }
+
+    var pasteboardItem: NSPasteboardItem {
+        let item = NSPasteboardItem()
+        for value in values {
+            item.setData(value.data, forType: value.type)
+        }
+        return item
     }
 }
 

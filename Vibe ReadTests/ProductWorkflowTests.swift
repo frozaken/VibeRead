@@ -90,6 +90,36 @@ struct ProductWorkflowTests {
         #expect(pasteboard.string(forType: .string) == "Recoverable dictation")
     }
 
+    @Test @MainActor func explicitActionPasteRestoresThePreviousClipboard() throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("Previous clipboard", forType: .string)
+        let target = UniversalActionTarget(
+            bundleIdentifier: "com.example.Editor",
+            processIdentifier: 42,
+            applicationName: "Editor"
+        )
+        var posted = false
+
+        let didPaste = AccessibilityService.deliverTextTemporarily(
+            "Explicit action output",
+            expectedTarget: target,
+            pasteboard: pasteboard,
+            hasAccessibilityPermission: true,
+            currentTarget: { target },
+            postPasteShortcut: {
+                posted = true
+                return true
+            },
+            scheduleRestore: { restore in restore() }
+        )
+
+        #expect(didPaste)
+        #expect(posted)
+        #expect(pasteboard.string(forType: .string) == "Previous clipboard")
+    }
+
     @Test func elevenLabsTTSUsesDirectCurrentContract() async throws {
         let capture = ProductRequestCapture()
         let client = ElevenLabsTTSClient { request in

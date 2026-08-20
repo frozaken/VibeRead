@@ -77,6 +77,7 @@ struct MainView: View {
         }
         .tint(AppTheme.Colors.brandAccent)
         .background(AppTheme.Colors.sidebarBackground)
+        .background(WindowChromeConfigurator(isSidebarCollapsed: $isSidebarCollapsed))
         .toolbarBackground(AppTheme.Colors.sidebarBackground, for: .windowToolbar)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSidebarCollapsed)
         .sheet(isPresented: $showingSettings) {
@@ -135,16 +136,12 @@ private struct LocalSidebarView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var logoPressed = false
-    @State private var collapseHovered = false
 
     var body: some View {
         VStack(spacing: 0) {
             Group {
                 if isCollapsed {
-                    VStack(spacing: 10) {
-                        logoButton
-                        collapseButton
-                    }
+                    logoButton
                 } else {
                     HStack(spacing: 10) {
                         logoButton
@@ -156,8 +153,6 @@ private struct LocalSidebarView: View {
                             .transition(.opacity.combined(with: .move(edge: .leading)))
 
                         Spacer(minLength: 0)
-
-                        collapseButton
                     }
                 }
             }
@@ -211,27 +206,6 @@ private struct LocalSidebarView: View {
         .accessibilityHint("Celebrate with confetti")
     }
 
-    private var collapseButton: some View {
-        Button {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                isCollapsed.toggle()
-            }
-        } label: {
-            Image(systemName: "sidebar.left")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(collapseHovered ? Color.primary : Color.secondary)
-                .frame(width: 28, height: 28)
-                .background {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(collapseHovered ? Color.primary.opacity(0.07) : Color.clear)
-                }
-        }
-        .buttonStyle(.plain)
-        .onHover { collapseHovered = $0 }
-        .help(isCollapsed ? "Expand Sidebar" : "Collapse Sidebar")
-        .accessibilityLabel(isCollapsed ? "Expand Sidebar" : "Collapse Sidebar")
-    }
-
     private func celebrate() {
         showConfetti = false
         if !reduceMotion {
@@ -247,6 +221,120 @@ private struct LocalSidebarView: View {
                 logoPressed = false
             }
         }
+    }
+}
+
+private struct WindowChromeConfigurator: NSViewRepresentable {
+    @Binding var isSidebarCollapsed: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isSidebarCollapsed: $isSidebarCollapsed)
+    }
+
+    func makeNSView(context: Context) -> WindowAttachmentView {
+        let view = WindowAttachmentView()
+        view.onWindowChange = { window in
+            context.coordinator.install(in: window)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: WindowAttachmentView, context: Context) {
+        context.coordinator.isSidebarCollapsed = $isSidebarCollapsed
+        context.coordinator.updateButton()
+        if let window = nsView.window {
+            context.coordinator.install(in: window)
+        }
+    }
+
+    static func dismantleNSView(_ nsView: WindowAttachmentView, coordinator: Coordinator) {
+        coordinator.removeAccessory()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var isSidebarCollapsed: Binding<Bool>
+
+        private weak var installedWindow: NSWindow?
+        private var accessory: NSTitlebarAccessoryViewController?
+        private let button = NSButton()
+
+        init(isSidebarCollapsed: Binding<Bool>) {
+            self.isSidebarCollapsed = isSidebarCollapsed
+            super.init()
+
+            button.target = self
+            button.action = #selector(toggleSidebar)
+            button.isBordered = false
+            button.imagePosition = .imageOnly
+            button.imageScaling = .scaleProportionallyDown
+            button.contentTintColor = .secondaryLabelColor
+            button.focusRingType = .none
+        }
+
+        func install(in window: NSWindow?) {
+            guard let window else { return }
+            guard installedWindow !== window else {
+                updateButton()
+                return
+            }
+
+            removeAccessory()
+            installedWindow = window
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+
+            let container = NSView(frame: NSRect(x: 0, y: 0, width: 36, height: 28))
+            button.frame = NSRect(x: 4, y: 0, width: 28, height: 28)
+            button.autoresizingMask = [.minYMargin, .maxYMargin]
+            container.addSubview(button)
+
+            let accessory = NSTitlebarAccessoryViewController()
+            accessory.layoutAttribute = .left
+            accessory.view = container
+            window.addTitlebarAccessoryViewController(accessory)
+            self.accessory = accessory
+            updateButton()
+        }
+
+        func updateButton() {
+            let isCollapsed = isSidebarCollapsed.wrappedValue
+            let description = isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"
+            button.image = NSImage(
+                systemSymbolName: "sidebar.left",
+                accessibilityDescription: description
+            )
+            button.toolTip = description
+            button.setAccessibilityLabel(description)
+        }
+
+        func removeAccessory() {
+            guard let installedWindow, let accessory,
+                  let index = installedWindow.titlebarAccessoryViewControllers.firstIndex(where: { $0 === accessory })
+            else {
+                self.accessory = nil
+                self.installedWindow = nil
+                return
+            }
+
+            installedWindow.removeTitlebarAccessoryViewController(at: index)
+            self.accessory = nil
+            self.installedWindow = nil
+        }
+
+        @objc private func toggleSidebar() {
+            isSidebarCollapsed.wrappedValue.toggle()
+            updateButton()
+        }
+    }
+}
+
+private final class WindowAttachmentView: NSView {
+    var onWindowChange: ((NSWindow?) -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onWindowChange?(window)
     }
 }
 

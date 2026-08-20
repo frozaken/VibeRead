@@ -97,11 +97,12 @@ class DictationService: ObservableObject {
     private var activeDurationMs: Int?
     private var activeClientID: UUID?
     private var activePasteTarget: UniversalActionTarget?
+    private var activeContextApplicationName: String?
 
     private struct PendingMicrophoneStart {
         let id: UUID
         let mode: RecordingMode
-        let pasteTarget: UniversalActionTarget?
+        let contextApplicationName: String?
         let requiresHeldShortcut: Bool
         var shouldStartAfterPermission: Bool
     }
@@ -113,6 +114,8 @@ class DictationService: ObservableObject {
     private var pendingCancelDurationMs: Int?
     private var pendingCancelClientID: UUID?
     private var pendingCancelPasteTarget: UniversalActionTarget?
+    private var pendingCancelContextApplicationName: String?
+    private var pendingCancelCapturesTargetOnUndo = false
     private var undoTimer: Timer?
 
     private init() {}
@@ -252,6 +255,7 @@ class DictationService: ObservableObject {
             if pendingMicrophoneStart?.requiresHeldShortcut == true {
                 pendingMicrophoneStart?.shouldStartAfterPermission = false
                 activePasteTarget = nil
+                activeContextApplicationName = nil
             }
         default:
             break
@@ -278,12 +282,17 @@ class DictationService: ObservableObject {
             let savedURL = pendingCancelSavedURL
             let durationMs = pendingCancelDurationMs
             let clientID = pendingCancelClientID
-            let pasteTarget = pendingCancelPasteTarget
+            let pasteTarget = pendingCancelCapturesTargetOnUndo
+                ? Self.frontmostApplicationTarget()
+                : pendingCancelPasteTarget
+            let contextApplicationName = pendingCancelContextApplicationName
             pendingCancelURL = nil
             pendingCancelSavedURL = nil
             pendingCancelDurationMs = nil
             pendingCancelClientID = nil
             pendingCancelPasteTarget = nil
+            pendingCancelContextApplicationName = nil
+            pendingCancelCapturesTargetOnUndo = false
 
             // Recording cannot be resumed, but the captured audio can be sent
             // again. Reuse its retained copy so undo does not create an orphan.
@@ -295,7 +304,8 @@ class DictationService: ObservableObject {
                 durationMs: durationMs,
                 existingSavedURL: savedURL,
                 clientID: clientID,
-                pasteTarget: pasteTarget
+                pasteTarget: pasteTarget,
+                contextApplicationName: contextApplicationName
             )
         }
 
@@ -318,10 +328,13 @@ class DictationService: ObservableObject {
         pendingCancelSavedURL = nil
         pendingCancelDurationMs = Int(recordingDuration * 1_000)
         pendingCancelClientID = nil
-        pendingCancelPasteTarget = activePasteTarget
+        pendingCancelPasteTarget = nil
+        pendingCancelContextApplicationName = activeContextApplicationName
+        pendingCancelCapturesTargetOnUndo = true
 
         recordingURL = nil
         activePasteTarget = nil
+        activeContextApplicationName = nil
         recordingDuration = 0
         state = .cancelled
         undoCountdown = undoDuration
@@ -342,6 +355,8 @@ class DictationService: ObservableObject {
         pendingCancelDurationMs = activeDurationMs
         pendingCancelClientID = activeClientID
         pendingCancelPasteTarget = activePasteTarget
+        pendingCancelContextApplicationName = activeContextApplicationName
+        pendingCancelCapturesTargetOnUndo = false
         clearActiveTranscriptionResources()
         recordingURL = nil
 
@@ -380,6 +395,8 @@ class DictationService: ObservableObject {
         pendingCancelDurationMs = nil
         pendingCancelClientID = nil
         pendingCancelPasteTarget = nil
+        pendingCancelContextApplicationName = nil
+        pendingCancelCapturesTargetOnUndo = false
     }
 
     private func beginRecording(
@@ -391,28 +408,29 @@ class DictationService: ObservableObject {
         // resolved so they cannot replace its mode or target.
         guard pendingMicrophoneStart == nil else { return }
 
-        // Bind the operation to the app where the shortcut began. Switching
-        // apps while speaking must not change Smart context or the paste
-        // destination after the network request finishes.
-        let pasteTarget = Self.frontmostApplicationTarget()
+        // Smart Dictation may use the starting app name as bounded context.
+        // Delivery is intentionally chosen later, when the user presses Send.
+        let contextApplicationName = Self.frontmostApplicationTarget()?.applicationName
         currentMode = mode
-        activePasteTarget = pasteTarget
+        activePasteTarget = nil
+        activeContextApplicationName = contextApplicationName
         performStartRecording(
             mode: mode,
-            pasteTarget: pasteTarget,
+            contextApplicationName: contextApplicationName,
             requiresHeldShortcut: requiresHeldShortcut
         )
     }
 
     private func performStartRecording(
         mode: RecordingMode,
-        pasteTarget: UniversalActionTarget?,
+        contextApplicationName: String?,
         requiresHeldShortcut: Bool
     ) {
         do {
             recordingURL = try recorder.startRecording()
             currentMode = mode
-            activePasteTarget = pasteTarget
+            activePasteTarget = nil
+            activeContextApplicationName = contextApplicationName
             recordingDuration = 0
 
             switch mode {
@@ -437,7 +455,7 @@ class DictationService: ObservableObject {
             let request = PendingMicrophoneStart(
                 id: UUID(),
                 mode: mode,
-                pasteTarget: pasteTarget,
+                contextApplicationName: contextApplicationName,
                 requiresHeldShortcut: requiresHeldShortcut,
                 shouldStartAfterPermission: true
             )
@@ -450,23 +468,27 @@ class DictationService: ObservableObject {
                 self.pendingMicrophoneStart = nil
                 guard pendingRequest.shouldStartAfterPermission else {
                     self.activePasteTarget = nil
+                    self.activeContextApplicationName = nil
                     return
                 }
                 if granted {
                     self.currentMode = pendingRequest.mode
-                    self.activePasteTarget = pendingRequest.pasteTarget
+                    self.activePasteTarget = nil
+                    self.activeContextApplicationName = pendingRequest.contextApplicationName
                     self.performStartRecording(
                         mode: pendingRequest.mode,
-                        pasteTarget: pendingRequest.pasteTarget,
+                        contextApplicationName: pendingRequest.contextApplicationName,
                         requiresHeldShortcut: pendingRequest.requiresHeldShortcut
                     )
                 } else {
                     self.activePasteTarget = nil
+                    self.activeContextApplicationName = nil
                     self.state = .error("Microphone permission denied")
                 }
             }
         } catch {
             activePasteTarget = nil
+            activeContextApplicationName = nil
             state = .error(error.localizedDescription)
             print("[Dictation] Failed to start: \(error)")
         }
@@ -504,8 +526,14 @@ class DictationService: ObservableObject {
     private func stopAndTranscribe() {
         stopRecordingTimer()
 
+        // The app containing the cursor when Send is pressed is the intended
+        // destination. Hold this target through the provider request, then
+        // revalidate it immediately before posting Cmd+V.
+        let pasteTarget = Self.frontmostApplicationTarget()
+
         guard let url = recorder.stopRecording() else {
             activePasteTarget = nil
+            activeContextApplicationName = nil
             state = .error("No recording to process")
             return
         }
@@ -521,7 +549,8 @@ class DictationService: ObservableObject {
         transcribeAudio(
             url: url,
             durationMs: recordedDurationMs,
-            pasteTarget: activePasteTarget
+            pasteTarget: pasteTarget,
+            contextApplicationName: activeContextApplicationName
         )
     }
 
@@ -530,23 +559,23 @@ class DictationService: ObservableObject {
         durationMs: Int? = nil,
         existingSavedURL: URL? = nil,
         clientID existingClientID: UUID? = nil,
-        pasteTarget capturedPasteTarget: UniversalActionTarget?
+        pasteTarget capturedPasteTarget: UniversalActionTarget?,
+        contextApplicationName capturedContextApplicationName: String?
     ) {
         transcriptionTask?.cancel()
         let savedURL = existingSavedURL ?? saveAudioForHistory(tempURL: url)
         let mode = currentMode  // Capture mode before async
 
         let clientID = existingClientID ?? UUID()
-        // The argument is deliberately required even though its value may be
-        // nil. A failed start-time capture must remain nil and fail closed; it
-        // must never be confused with "not supplied" and rebound at Send.
+        // The destination is captured at Send, not when recording begins and
+        // not after the provider returns. A nil capture remains fail-closed.
         let pasteTarget = capturedPasteTarget
         // Normal fn, hands-free, and command-palette dictation remain direct
         // speech-to-text. Only the explicit Smart shortcut invokes a text model.
         let transformPrompt = Self.transformPrompt(
             for: mode,
             smartPrompt: AppSettings.shared.smartDictationPrompt,
-            targetApplicationName: pasteTarget?.applicationName
+            targetApplicationName: capturedContextApplicationName
         )
         let transcriptionID = UUID()
         activeTranscriptionID = transcriptionID
@@ -555,6 +584,7 @@ class DictationService: ObservableObject {
         activeDurationMs = durationMs
         activeClientID = clientID
         activePasteTarget = pasteTarget
+        activeContextApplicationName = capturedContextApplicationName
 
         transcriptionTask = Task { [weak self] in
             guard let self else { return }
@@ -591,20 +621,29 @@ class DictationService: ObservableObject {
                                 : "Smart edit was unavailable. Your raw dictation was saved."
                         }
                         if AppSettings.shared.autoPasteAfterDictation {
-                            if let pasteTarget,
-                               UniversalActionService.targetMatches(
-                                   pasteTarget,
-                                   Self.frontmostApplicationTarget()
-                               ) {
-                                if !AccessibilityService.shared.pasteText(
+                            if let pasteTarget {
+                                let outcome = AccessibilityService.shared.pasteTextWithOutcome(
                                     result.polishedText,
                                     expectedTarget: pasteTarget
-                                ) {
-                                    completionWarning = "Dictation saved. Grant Accessibility access, then use Paste last dictation."
+                                )
+                                switch outcome {
+                                case .pasted:
+                                    if case .smart = mode, result.warning != nil {
+                                        completionWarning = "Smart edit was unavailable. Raw dictation pasted and copied."
+                                    }
+                                case .copiedOnly(.targetChanged):
+                                    completionWarning = "Could not paste into \(pasteTarget.applicationName). Copied to clipboard."
+                                case .copiedOnly(.accessibilityDenied):
+                                    completionWarning = "Could not paste automatically. Copied to clipboard. Grant Accessibility access to enable auto-paste."
+                                case .copiedOnly(.eventUnavailable):
+                                    completionWarning = "Could not send Cmd+V. Copied to clipboard."
+                                case .copiedOnly(.clipboardUnavailable), .failed:
+                                    completionWarning = "Dictation saved, but clipboard copy failed. Copy it from History."
                                 }
+                            } else if AccessibilityService.shared.copyTextToClipboard(result.polishedText) {
+                                completionWarning = "Could not identify the paste destination. Copied to clipboard."
                             } else {
-                                let applicationName = pasteTarget?.applicationName ?? "the original app"
-                                completionWarning = "Dictation saved. Focus \(applicationName), then use Paste last dictation."
+                                completionWarning = "Dictation saved, but clipboard copy failed. Copy it from History."
                             }
                         }
                     case .command:
@@ -755,6 +794,7 @@ class DictationService: ObservableObject {
         activeDurationMs = nil
         activeClientID = nil
         activePasteTarget = nil
+        activeContextApplicationName = nil
     }
 
     /// Cancels in-flight private work and removes audio that has not yet been
@@ -790,6 +830,8 @@ class DictationService: ObservableObject {
         pendingCancelDurationMs = nil
         pendingCancelClientID = nil
         pendingCancelPasteTarget = nil
+        pendingCancelContextApplicationName = nil
+        pendingCancelCapturesTargetOnUndo = false
         lastResult = nil
         recordingDuration = 0
         undoCountdown = 0

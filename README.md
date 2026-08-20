@@ -59,6 +59,11 @@ That is all you need for normal dictation. Normal Fn dictation sends audio only
 to the chosen dictation provider and pastes the returned transcript. It never
 invokes a text model.
 
+The app containing your cursor when you press Send becomes the paste
+destination. Vibe Read checks that the same app is still active before posting
+Cmd + V. Completed auto-paste dictations also remain on the clipboard, so a
+blocked or ignored paste can always be recovered with Cmd + V.
+
 Smart Dictation and provider-backed Cmd + E actions are optional. Configure a
 text provider such as Groq, OpenRouter, OpenAI, or a compatible local service,
 then press **Fn + Option** once to start Smart Dictation and again to finish.
@@ -201,6 +206,7 @@ Vibe Read stores its own data on your Mac. Provider requests go directly from th
 | Dictation audio | Your configured provider when you transcribe |
 | Text used by an action | Your configured text provider when you run that action |
 | Smart Dictation text | Your configured text provider only when you use Smart Dictation. The request contains the raw transcript, your local Smart prompt, and a sanitized original app name. |
+| Completed auto-paste text | Local clipboard, so the result remains recoverable if automatic paste is blocked or ignored |
 | Saved Library items | Local JSON until you delete them |
 | ElevenLabs voice list | Voice metadata is fetched only when you choose Load Voices and may be cached in macOS preferences |
 | Read-aloud or preview text | ElevenLabs only when selected, otherwise the macOS speech synthesizer. Preview and read requests use your provider credits. |

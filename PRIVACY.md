@@ -26,6 +26,10 @@ document describes the current app's data flow.
   provider credential that can power dictation, Smart Dictation, and Cmd + E.
   ElevenLabs uses one credential for dictation and optional read-aloud. Custom
   dictation and custom text actions use separate credentials.
+- When automatic paste is enabled, completed dictation text remains on the
+  macOS clipboard so it can be recovered if a destination changes or ignores
+  Cmd + V. macOS Universal Clipboard settings may sync clipboard contents
+  through services controlled by the user.
 
 Launching Vibe Read and opening Settings do not read Keychain. The app reads a
 saved Keychain item only after the user explicitly verifies it or intentionally
@@ -156,8 +160,8 @@ feature that needs it.
 - **Accessibility:** observes function-key shortcuts, reads selected text, and
   inserts text into other applications. Ordinary global chords such as Cmd + E
   do not require this permission.
-- **Clipboard:** is used for explicit copy actions and can be offered as a
-  fallback when Accessibility cannot read the current selection.
+- **Clipboard:** is used for explicit copy actions and as the recovery path for
+  completed auto-paste dictations.
 
 Selected text used by an action is held in memory for the operation and is not
 added to dictation history.

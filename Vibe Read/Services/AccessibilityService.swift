@@ -4,6 +4,33 @@ import ApplicationServices
 import Combine
 import CoreGraphics
 
+enum PasteFailure: Equatable {
+    case accessibilityDenied
+    case targetChanged
+    case eventUnavailable
+    case clipboardUnavailable
+}
+
+enum PasteOutcome: Equatable {
+    case pasted
+    case copiedOnly(PasteFailure)
+    case failed(PasteFailure)
+
+    var didPaste: Bool {
+        if case .pasted = self { return true }
+        return false
+    }
+
+    var isOnClipboard: Bool {
+        switch self {
+        case .pasted, .copiedOnly:
+            return true
+        case .failed:
+            return false
+        }
+    }
+}
+
 /// Permission and focused-application operations that macOS protects behind
 /// Accessibility. Reserved ordinary shortcuts do not depend on this service.
 class AccessibilityService: ObservableObject {
@@ -185,99 +212,132 @@ class AccessibilityService: ObservableObject {
         return nil
     }
 
-    /// Simulate a key press with modifiers
-    private func simulateKeyPress(keyCode: CGKeyCode, modifiers: CGEventFlags) {
+    /// Simulate a key press with modifiers. Returning false means the event
+    /// could not be constructed, so callers can keep a clipboard fallback.
+    private func simulateKeyPress(keyCode: CGKeyCode, modifiers: CGEventFlags) -> Bool {
         let source = CGEventSource(stateID: .hidSystemState)
 
-        // Key down
-        if let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true) {
-            keyDown.flags = modifiers
-            keyDown.post(tap: .cghidEventTap)
-        }
+        guard let keyDown = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: keyCode,
+            keyDown: true
+        ), let keyUp = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: keyCode,
+            keyDown: false
+        ) else { return false }
 
-        // Key up
-        if let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) {
-            keyUp.flags = modifiers
-            keyUp.post(tap: .cghidEventTap)
-        }
+        keyDown.flags = modifiers
+        keyUp.flags = modifiers
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
+        return true
     }
 
     // MARK: - Paste Text
 
-    /// Paste text at the current cursor position. The caller should surface a
-    /// permission error when this returns false. When possible, the existing
-    /// clipboard is restored after the target app has consumed Cmd+V.
+    /// Put completed text on the clipboard without posting a key event.
+    /// This is the fail-safe when no trustworthy paste destination exists.
+    @discardableResult
+    func copyTextToClipboard(_ text: String) -> Bool {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        return pasteboard.setString(text, forType: .string)
+    }
+
+    /// Paste text at the current cursor position and leave the text on the
+    /// clipboard. Keeping the output there is the recovery path when an app
+    /// such as an Electron editor does not consume the synthetic Cmd+V.
+    func pasteTextWithOutcome(
+        _ text: String,
+        expectedTarget: UniversalActionTarget? = nil
+    ) -> PasteOutcome {
+        let outcome = Self.deliverText(
+            text,
+            expectedTarget: expectedTarget,
+            pasteboard: .general,
+            hasAccessibilityPermission: checkPermission(),
+            currentTarget: {
+                guard let application = NSWorkspace.shared.frontmostApplication else {
+                    return nil
+                }
+                return UniversalActionTarget(
+                    bundleIdentifier: application.bundleIdentifier ?? "",
+                    processIdentifier: application.processIdentifier,
+                    applicationName: application.localizedName ?? "the original app"
+                )
+            },
+            postPasteShortcut: { [weak self] in
+                self?.simulateKeyPress(keyCode: 9, modifiers: .maskCommand) ?? false
+            }
+        )
+
+        switch outcome {
+        case .pasted:
+            print("[Accessibility] Paste shortcut posted; text retained on clipboard")
+        case .copiedOnly(.accessibilityDenied):
+            print("[Accessibility] Copied text; cannot paste without Accessibility permission")
+        case .copiedOnly(.targetChanged):
+            print("[Accessibility] Copied text; paste target changed")
+        case .copiedOnly(.eventUnavailable):
+            print("[Accessibility] Copied text; paste shortcut unavailable")
+        case .copiedOnly(.clipboardUnavailable), .failed:
+            print("[Accessibility] Could not place text on the clipboard")
+        }
+
+        return outcome
+    }
+
+    /// Backward-compatible convenience for callers that need only to know
+    /// whether Cmd+V was posted. The output is retained on the clipboard for
+    /// both successful and failed paste attempts.
     @discardableResult
     func pasteText(
         _ text: String,
         expectedTarget: UniversalActionTarget? = nil
     ) -> Bool {
-        guard checkPermission() else {
-            print("[Accessibility] Cannot paste without Accessibility permission")
-            return false
-        }
+        pasteTextWithOutcome(text, expectedTarget: expectedTarget).didPaste
+    }
 
-        // Revalidate at the actual event-posting boundary. Callers may have
-        // checked focus before entering this method, but provider completions
-        // must never rely on an earlier snapshot if the foreground app changed.
-        if let expectedTarget {
-            guard let application = NSWorkspace.shared.frontmostApplication,
-                  application.processIdentifier == expectedTarget.processIdentifier,
-                  expectedTarget.bundleIdentifier.isEmpty
-                    || application.bundleIdentifier == expectedTarget.bundleIdentifier else {
-                print("[Accessibility] Paste target changed")
-                return false
-            }
-        }
-
-        let pasteboard = NSPasteboard.general
-        let previousItems = (pasteboard.pasteboardItems ?? []).map {
-            PasteboardItemSnapshot(item: $0)
-        }
+    /// Deterministic core used by unit tests and the live Accessibility path.
+    /// The clipboard write deliberately precedes every guarded paste outcome,
+    /// so a completed dictation is recoverable without opening History.
+    static func deliverText(
+        _ text: String,
+        expectedTarget: UniversalActionTarget?,
+        pasteboard: NSPasteboard,
+        hasAccessibilityPermission: Bool,
+        currentTarget: () -> UniversalActionTarget?,
+        postPasteShortcut: () -> Bool
+    ) -> PasteOutcome {
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        let temporaryChangeCount = pasteboard.changeCount
-
-        // Snapshotting a rich or lazily provided clipboard can take time. Check
-        // focus again after that work and immediately before posting Cmd+V. If
-        // the target changed, restore the clipboard synchronously and refuse
-        // the paste rather than sending private output to another app.
-        if let expectedTarget {
-            guard let application = NSWorkspace.shared.frontmostApplication,
-                  application.processIdentifier == expectedTarget.processIdentifier,
-                  expectedTarget.bundleIdentifier.isEmpty
-                    || application.bundleIdentifier == expectedTarget.bundleIdentifier else {
-                if pasteboard.changeCount == temporaryChangeCount {
-                    pasteboard.clearContents()
-                    let restoredItems = previousItems.map(\.pasteboardItem)
-                    if !restoredItems.isEmpty {
-                        pasteboard.writeObjects(restoredItems)
-                    }
-                }
-                print("[Accessibility] Paste target changed")
-                return false
-            }
+        guard pasteboard.setString(text, forType: .string) else {
+            return .failed(.clipboardUnavailable)
         }
 
-        // NSPasteboard writes are synchronous. Post Cmd+V immediately so a
-        // target check performed by the caller cannot go stale during an
-        // arbitrary delay before the key event is sent.
-        simulateKeyPress(keyCode: 9, modifiers: .maskCommand)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            // Never overwrite a clipboard change the user made while the
-            // synthetic paste was in flight.
-            guard pasteboard.changeCount == temporaryChangeCount else { return }
-            pasteboard.clearContents()
-            let restoredItems = previousItems.map(\.pasteboardItem)
-            if !restoredItems.isEmpty {
-                pasteboard.writeObjects(restoredItems)
-            }
+        guard hasAccessibilityPermission else {
+            return .copiedOnly(.accessibilityDenied)
         }
 
-        // Do not log pasted content. It may be a private dictation or selection.
-        print("[Accessibility] Pasted text")
-        return true
+        if let expectedTarget,
+           !targetMatches(expectedTarget, currentTarget()) {
+            return .copiedOnly(.targetChanged)
+        }
+
+        guard postPasteShortcut() else {
+            return .copiedOnly(.eventUnavailable)
+        }
+        return .pasted
+    }
+
+    private static func targetMatches(
+        _ expected: UniversalActionTarget,
+        _ current: UniversalActionTarget?
+    ) -> Bool {
+        guard let current else { return false }
+        return expected.processIdentifier == current.processIdentifier
+            && (expected.bundleIdentifier.isEmpty
+                || expected.bundleIdentifier == current.bundleIdentifier)
     }
 
     // MARK: - Get Frontmost App Info
@@ -291,24 +351,6 @@ class AccessibilityService: ObservableObject {
             name: frontApp.localizedName ?? "Unknown",
             bundleId: frontApp.bundleIdentifier ?? "Unknown"
         )
-    }
-}
-
-private struct PasteboardItemSnapshot {
-    let values: [(type: NSPasteboard.PasteboardType, data: Data)]
-
-    init(item: NSPasteboardItem) {
-        values = item.types.compactMap { type in
-            item.data(forType: type).map { (type, $0) }
-        }
-    }
-
-    var pasteboardItem: NSPasteboardItem {
-        let item = NSPasteboardItem()
-        for value in values {
-            item.setData(value.data, forType: value.type)
-        }
-        return item
     }
 }
 

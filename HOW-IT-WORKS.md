@@ -65,8 +65,9 @@ configured without an API key.
    fails, Vibe Read keeps the successful raw transcript as the final text and
    reports a nonfatal warning.
 7. Vibe Read saves the raw transcript and final text to a local SQLite
-   database. It can insert the final text into another app through macOS
-   Accessibility.
+   database. The app containing the cursor when Send is pressed becomes the
+   delivery target. Vibe Read rechecks that target before posting Cmd + V and
+   leaves the completed text on the clipboard as a recovery path.
 8. The retained recording is stored under Application Support. Audio is
    deleted after seven days by default. Transcript text remains until the user
    deletes it.

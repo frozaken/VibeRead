@@ -1,8 +1,95 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Vibe_Read
 
 struct ProductWorkflowTests {
+    @Test @MainActor func matchingPasteTargetPostsAndLeavesRecoveryClipboard() throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let target = UniversalActionTarget(
+            bundleIdentifier: "com.example.Editor",
+            processIdentifier: 42,
+            applicationName: "Editor"
+        )
+        var posted = false
+
+        let outcome = AccessibilityService.deliverText(
+            "Finished dictation",
+            expectedTarget: target,
+            pasteboard: pasteboard,
+            hasAccessibilityPermission: true,
+            currentTarget: { target },
+            postPasteShortcut: {
+                posted = true
+                return true
+            }
+        )
+
+        #expect(outcome == .pasted)
+        #expect(posted)
+        #expect(pasteboard.string(forType: .string) == "Finished dictation")
+    }
+
+    @Test @MainActor func changedPasteTargetCopiesWithoutPosting() throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let slack = UniversalActionTarget(
+            bundleIdentifier: "com.tinyspeck.slackmacgap",
+            processIdentifier: 42,
+            applicationName: "Slack"
+        )
+        let codex = UniversalActionTarget(
+            bundleIdentifier: "com.openai.codex",
+            processIdentifier: 84,
+            applicationName: "Codex"
+        )
+        var posted = false
+
+        let outcome = AccessibilityService.deliverText(
+            "Recoverable dictation",
+            expectedTarget: slack,
+            pasteboard: pasteboard,
+            hasAccessibilityPermission: true,
+            currentTarget: { codex },
+            postPasteShortcut: {
+                posted = true
+                return true
+            }
+        )
+
+        #expect(outcome == .copiedOnly(.targetChanged))
+        #expect(!posted)
+        #expect(pasteboard.string(forType: .string) == "Recoverable dictation")
+    }
+
+    @Test @MainActor func deniedAccessibilityStillLeavesRecoveryClipboard() throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let target = UniversalActionTarget(
+            bundleIdentifier: "com.example.Editor",
+            processIdentifier: 42,
+            applicationName: "Editor"
+        )
+        var posted = false
+
+        let outcome = AccessibilityService.deliverText(
+            "Recoverable dictation",
+            expectedTarget: target,
+            pasteboard: pasteboard,
+            hasAccessibilityPermission: false,
+            currentTarget: { target },
+            postPasteShortcut: {
+                posted = true
+                return true
+            }
+        )
+
+        #expect(outcome == .copiedOnly(.accessibilityDenied))
+        #expect(!posted)
+        #expect(pasteboard.string(forType: .string) == "Recoverable dictation")
+    }
+
     @Test func elevenLabsTTSUsesDirectCurrentContract() async throws {
         let capture = ProductRequestCapture()
         let client = ElevenLabsTTSClient { request in

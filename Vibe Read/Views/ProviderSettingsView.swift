@@ -334,14 +334,16 @@ struct ProviderConfigurationSettingsView: View {
             let hasStoredKey = settings.credentialStatus(for: credential)
                 .hasStoredCredential
             let buttonTitle = saveOnly
-                ? (hasStoredKey && !hasEnteredKey ? "Key Saved" : "Save Key")
+                ? (hasEnteredKey
+                    ? "Save Key & Settings"
+                    : (hasStoredKey ? "Save Settings" : "Add Key First"))
                 : (hasEnteredKey
                     ? "Save & Verify"
                     : (hasStoredKey ? "Verify Saved Key" : "Verify Connection"))
             Button(buttonTitle, action: saveAction)
                 .disabled(
                     isVerifying
-                        || (saveOnly && !hasEnteredKey)
+                        || (saveOnly && !hasEnteredKey && !hasStoredKey)
                         || (!saveOnly && !hasEnteredKey && !hasStoredKey && !allowsEmptyKey)
                 )
             if isVerifying {
@@ -365,7 +367,7 @@ struct ProviderConfigurationSettingsView: View {
 
         Text(
             saveOnly
-                ? "Paste a key, use a local .env file, or recover the previous build. Setup does not contact ElevenLabs. Your first dictation sends audio directly to Scribe v2 and is the end-to-end test."
+                ? "Save Settings changes the language without re-entering or reading an existing key. Adding a key does not contact ElevenLabs. Your first dictation sends audio directly to Scribe v2 and is the end-to-end test."
                 : "Opening Settings never reads Keychain. Save & Verify checks only this provider and does not upload audio or selected text. It also checks the selected model when the provider exposes an applicable model list. The selected model is exercised only when you use the feature."
         )
             .font(.caption)
@@ -498,19 +500,31 @@ struct ProviderConfigurationSettingsView: View {
         let enteredKey = dictationKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let credential = selectedProvider.credential
         if selectedProvider == .elevenLabs {
-            guard !enteredKey.isEmpty else {
-                dictationResult = .failure("Enter your ElevenLabs API key")
+            let hasStoredCredential = settings.credentialStatus(for: credential)
+                .hasStoredCredential
+            guard !enteredKey.isEmpty || hasStoredCredential else {
+                dictationResult = .failure("Add your ElevenLabs API key first")
                 return
             }
             do {
-                try settings.saveAPIKey(enteredKey, for: credential)
+                if !enteredKey.isEmpty {
+                    try settings.saveAPIKey(enteredKey, for: credential)
+                }
                 settings.dictationProvider = selectedProvider
                 settings.dictationLanguage = selectedLanguage
-                suppressNextDictationDraftReset = true
-                dictationKey = ""
-                dictationResult = .success(
-                    "API key saved. No request was sent. Your first dictation tests Scribe v2."
-                )
+                settings.selectedDictationModel = selectedModel
+                settings.customDictationBaseURL = selectedBaseURL
+                if !enteredKey.isEmpty {
+                    suppressNextDictationDraftReset = true
+                    dictationKey = ""
+                    dictationResult = .success(
+                        "API key and dictation settings saved. No request was sent."
+                    )
+                } else {
+                    dictationResult = .success(
+                        "Dictation settings saved. Your next recording uses \(selectedLanguage.displayName)."
+                    )
+                }
             } catch {
                 dictationResult = .failure(error.localizedDescription)
             }
@@ -720,6 +734,9 @@ struct ProviderConfigurationSettingsView: View {
         do {
             try settings.recoverPreviousAPIKey(for: dictationProvider.credential)
             settings.dictationProvider = dictationProvider
+            settings.dictationLanguage = dictationLanguage
+            settings.selectedDictationModel = dictationModel
+            settings.customDictationBaseURL = dictationBaseURL
             dictationResult = .success("Recovered your existing key from the previous build.")
         } catch {
             dictationResult = .failure(previousKeyRecoveryMessage(for: error))

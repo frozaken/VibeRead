@@ -135,7 +135,7 @@ Older builds used one generic provider key. Vibe Read does not automatically
 discover or migrate that key. Re-enter it for the provider you want to use and
 use the save action shown for that provider.
 
-Dictation language can stay on Auto detect or be set explicitly. ElevenLabs uses Scribe v2. Other dictation providers offer presets plus a custom model ID field.
+Dictation language can stay on Auto detect or use one of 52 explicit ISO language hints, including Russian. ElevenLabs uses Scribe v2. Other dictation providers offer presets plus a custom model ID field.
 
 | Provider | Dictation choices | Smart Dictation and Cmd + E choices | Good fit |
 | --- | --- | --- | --- |
